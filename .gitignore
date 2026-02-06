@@ -1,0 +1,6 @@
+# mosdns 运行时生成，启动时由 gen_custom_rules 或 mosdns 重新生成
+rules/cache.dump
+rules/mosdns.log
+
+# 环境变量与敏感信息，勿提交
+.env

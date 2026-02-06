@@ -1,0 +1,181 @@
+# 日志设置
+log:
+  level: error
+  file: "/etc/mosdns/mosdns.log"
+
+# HTTP API 设置（可用于热加载、监控）
+api:
+  http: "0.0.0.0:9091"
+
+include: []
+
+plugins:
+  - tag: custom_hosts
+    type: hosts
+    args:
+      files:
+        - "/etc/mosdns/custom-hosts.txt"
+
+  - tag: custom_local_domains
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/custom-local.txt"
+
+  - tag: custom_remote_domains
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/custom-remote.txt"
+
+  - tag: geosite_cn
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/direct-list.txt"
+
+  - tag: geoip_cn
+    type: ip_set
+    args:
+      files:
+        - "/etc/mosdns/china_ip_list.txt"
+
+  - tag: geosite_apple
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/apple-cn.txt"
+
+  - tag: geosite_no_cn
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/proxy-list.txt"
+
+  - tag: geosite_gfw
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/geosite-gfw.txt"
+
+  - tag: lazy_cache
+    type: cache
+    args:
+      size: 10240
+      lazy_cache_ttl: 86400
+      dump_file: "/etc/mosdns/cache.dump"
+      dump_interval: 30
+
+  # 国内 DNS
+  - tag: forward_local
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: 119.29.29.29
+        - addr: 114.114.114.114
+        - addr: 223.5.5.5
+        - addr: 223.6.6.6
+        - addr: 180.76.76.76
+
+  # 远程 DNS：优先用 sgpcloud（100.64.89.1），保证 CDN 视角更贴近 SGP 出口
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: 100.64.89.1
+        - addr: 1.1.1.1
+        - addr: 8.8.8.8
+
+  - tag: has_resp_sequence
+    type: sequence
+    args:
+      - matches: has_resp
+        exec: accept
+
+  - tag: query_custom_hosts
+    type: sequence
+    args:
+      - exec: $custom_hosts
+      - exec: jump has_resp_sequence
+
+  - tag: query_custom_local
+    type: sequence
+    args:
+      - matches: qname $custom_local_domains
+        exec: $forward_local
+
+  - tag: query_custom_remote
+    type: sequence
+    args:
+      - matches: qname $custom_remote_domains
+        exec: $forward_remote
+
+  - tag: local_sequence
+    type: sequence
+    args:
+      - exec: $forward_local
+      - exec: jump has_resp_sequence
+
+  - tag: remote_sequence
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+      - exec: $forward_remote
+      - exec: jump has_resp_sequence
+
+  - tag: query_remote_must_not_be_cn
+    type: sequence
+    args:
+      - exec: $remote_sequence
+      - matches: resp_ip $geoip_cn
+        exec: drop_resp
+
+  - tag: query_is_local_domain
+    type: sequence
+    args:
+      - matches: qname $geosite_cn $geosite_apple
+        exec: $local_sequence
+
+  - tag: query_is_no_local_domain
+    type: sequence
+    args:
+      - matches: qname $geosite_no_cn $geosite_gfw
+        exec: $remote_sequence
+
+  - tag: fallback
+    type: fallback
+    args:
+      primary: query_remote_must_not_be_cn
+      secondary: local_sequence
+      threshold: 300
+      always_standby: true
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      - exec: $lazy_cache
+      - exec: $query_custom_local
+      - exec: jump has_resp_sequence
+      - exec: $query_custom_remote
+      - exec: jump has_resp_sequence
+      - exec: $query_custom_hosts
+      - exec: jump has_resp_sequence
+      - exec: $query_is_no_local_domain
+      - exec: jump has_resp_sequence
+      - exec: $query_is_local_domain
+      - exec: jump has_resp_sequence
+      - exec: $fallback
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: :53
+
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: :53

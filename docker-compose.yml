@@ -1,0 +1,51 @@
+# 环境变量：有 .env 时从 .env 读取（可复制 .env.example 为 .env 后修改），否则用下方默认
+# 敏感信息勿提交，.env 已加入 .gitignore
+
+services:
+  mosdns:
+    image: irinesistiana/mosdns:v5.3.3
+    container_name: mosdns
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      updater:
+        condition: service_healthy
+    volumes:
+      - ${MOSDNS_DATA_DIR:-/data/mosdns}/config.yaml:/etc/mosdns/config.yaml:ro
+      - ${MOSDNS_DATA_DIR:-/data/mosdns}/rules:/etc/mosdns
+    command: ["mosdns", "start", "-c", "/etc/mosdns/config.yaml"]
+
+  updater:
+    image: python:3.12-alpine
+    container_name: mosdns-updater
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ${MOSDNS_DATA_DIR:-/data/mosdns}/rules:/etc/mosdns
+      - ${MOSDNS_DATA_DIR:-/data/mosdns}/updater:/app:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/etc/mosdns/direct-list.txt"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 10s
+    environment:
+      PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-1}
+      RULES_DIR: "/etc/mosdns"
+      ROS_HOST: ${ROS_HOST:-10.100.50.254}
+      ROS_PORT: ${ROS_PORT:-8728}
+      ROS_USER: ${ROS_USER:-admin}
+      ROS_PASS: ${ROS_PASS:-}
+      ROS_LIST: ${ROS_LIST:-chatgpt-sgp}
+      ROS_COMMENT: ${ROS_COMMENT:-mosdns-chatgpt}
+      DNS_SERVER: ${DNS_SERVER:-1.1.1.1}
+      DNS_PORT: ${DNS_PORT:-53}
+      TTL_SECONDS: ${TTL_SECONDS:-1800}
+      INTERVAL: ${INTERVAL:-120}
+      DOMAINS_FILE: ${DOMAINS_FILE:-/etc/mosdns/custom-remote.txt}
+      TLS_VERIFY: ${TLS_VERIFY:-1}
+      TLS_PORT: ${TLS_PORT:-443}
+      TLS_TIMEOUT: ${TLS_TIMEOUT:-2.5}
+      TLS_CACHE_TTL: ${TLS_CACHE_TTL:-1800}
+      TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
+    command: ["sh", "-c", "apk add --no-cache ca-certificates >/dev/null 2>&1 && python -u /app/gen_custom_rules.py && python -u /app/updater.py"]
