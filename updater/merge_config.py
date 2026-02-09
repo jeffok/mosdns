@@ -11,6 +11,14 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml", "-q"])
     import yaml
 
+def resolve_path(path_str: str, base_dir: Path) -> Path:
+    """解析路径：绝对路径直接返回，相对路径相对于 base_dir"""
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
 def main() -> None:
     base_dir = Path(os.getenv("MOSDNS_CONFIG_DIR", "/etc/mosdns"))
     base_path = base_dir / "config.base.yaml"
@@ -37,22 +45,54 @@ def main() -> None:
     site = sites[site_name]
     site_plugins = (site.get("plugins") or []) if isinstance(site, dict) else []
     base_plugins = base.get("plugins") or []
+    
+    # 检查 DoH 证书是否存在
+    doh_cert = os.getenv("DOH_CERT", "")
+    doh_key = os.getenv("DOH_KEY", "")
+    enable_doh = False
+    
+    if doh_cert and doh_key:
+        cert_path = resolve_path(doh_cert, base_dir)
+        key_path = resolve_path(doh_key, base_dir)
+        if cert_path.exists() and key_path.exists():
+            enable_doh = True
+            print(f"[merge_config] DoH certificates found: cert={cert_path}, key={key_path}")
+        else:
+            print(f"[merge_config] WARN: DoH certificates not found (cert={cert_path}, key={key_path}), DoH disabled", file=sys.stderr)
+    else:
+        print(f"[merge_config] DoH certificates not configured (DOH_CERT/DOH_KEY), DoH disabled", file=sys.stderr)
+    
+    # 如果证书不存在，移除 doh_server 插件
+    if not enable_doh:
+        base_plugins = [p for p in base_plugins if p.get("tag") != "doh_server"]
+    
     merged = {**base, "plugins": site_plugins + base_plugins}
 
     out_text = yaml.dump(merged, allow_unicode=True, default_flow_style=False, sort_keys=False)
     listen_port = os.getenv("MOSDNS_LISTEN_PORT", "53")
     doh_port = os.getenv("DOH_PORT", "8443")
-    doh_cert_dir = os.getenv("DOH_CERT_DIR", "/etc/mosdns/certs")
-    out_text = (
-        out_text.replace("{{MOSDNS_LISTEN_PORT}}", listen_port)
-        .replace("{{DOH_PORT}}", doh_port)
-        .replace("{{DOH_CERT_DIR}}", doh_cert_dir)
-    )
+    
+    # 替换占位符
+    out_text = out_text.replace("{{MOSDNS_LISTEN_PORT}}", listen_port)
+    
+    if enable_doh:
+        cert_path = resolve_path(doh_cert, base_dir)
+        key_path = resolve_path(doh_key, base_dir)
+        out_text = (
+            out_text.replace("{{DOH_PORT}}", doh_port)
+            .replace("{{DOH_CERT}}", str(cert_path))
+            .replace("{{DOH_KEY}}", str(key_path))
+        )
+    else:
+        # 即使移除了插件，也要替换占位符避免配置错误
+        out_text = out_text.replace("{{DOH_PORT}}", doh_port)
+        out_text = out_text.replace("{{DOH_CERT}}", "")
+        out_text = out_text.replace("{{DOH_KEY}}", "")
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(out_text)
 
-    print(f"[merge_config] SITE={site_name} -> {out_path}")
+    print(f"[merge_config] SITE={site_name} -> {out_path}" + (", DoH enabled" if enable_doh else ", DoH disabled"))
 
 
 if __name__ == "__main__":

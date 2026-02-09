@@ -167,6 +167,7 @@ plugins:
       listen: "0.0.0.0:{{MOSDNS_LISTEN_PORT}}"
 
   # DoH：端口与证书路径由 merge_config 从环境变量替换（默认 8443，不占 443）
+  # 证书不存在时不启用 DoH（merge_config 会检查并移除此插件）
   - tag: doh_server
     type: http_server
     args:
@@ -174,6 +175,6 @@ plugins:
         - path: /dns-query
           exec: main_sequence
       listen: "0.0.0.0:{{DOH_PORT}}"
-      cert: "{{DOH_CERT_DIR}}/fullchain.pem"
-      key: "{{DOH_CERT_DIR}}/privkey.pem"
+      cert: "{{DOH_CERT}}"
+      key: "{{DOH_KEY}}"
       idle_timeout: 10

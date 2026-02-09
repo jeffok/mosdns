@@ -63,11 +63,11 @@ cp .env.example .env
 确保项目根目录下已有：
 - `config.base.yaml`、`sites.yaml`（多站点需在 sites.yaml 中替换占位符，见 [PLACEHOLDERS.md](PLACEHOLDERS.md)）
 - `updater/` 目录（本仓库整个 `updater/` 目录）
-- `certs/` 目录（内含 `fullchain.pem`、`privkey.pem`）
+- DoH 证书（可选）：如需启用 DoH，在 `.env` 中配置 `DOH_CERT` 和 `DOH_KEY` 路径
 
 **SITE**：`sz` / `hk` / `sgp` / `dxb`，按当前站点选择。
 
-**路径说明**：默认使用项目根目录，无需设置 `MOSDNS_DATA_DIR` 和 `DOH_CERT_DIR`。如需自定义路径，可在 `.env` 中设置。
+**路径说明**：默认使用项目根目录，无需设置 `MOSDNS_DATA_DIR`。DoH 证书路径可在 `.env` 中配置（支持绝对路径或相对路径），证书不存在时 DoH 自动禁用。
 
 ### 2. 启动
 

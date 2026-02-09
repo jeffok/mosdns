@@ -14,7 +14,6 @@ services:
         condition: service_healthy
     volumes:
       - ${MOSDNS_DATA_DIR:-.}:/etc/mosdns
-      - ${DOH_CERT_DIR:-./certs}:/etc/mosdns/certs:ro
     command: ["mosdns", "start", "-c", "/etc/mosdns/config.yaml"]
 
   updater:
@@ -60,7 +59,8 @@ services:
       TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
       MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-53}
       DOH_PORT: ${DOH_PORT:-8443}
-      DOH_CERT_DIR: "/etc/mosdns/certs"
+      DOH_CERT: ${DOH_CERT:-}
+      DOH_KEY: ${DOH_KEY:-}
       TZ: ${TZ:-Asia/Shanghai}
       DAILY_UPDATE_TIME: ${DAILY_UPDATE_TIME:-05:00}
     # entrypoint：merge_config → gen_custom_rules → crond(每日更新规则并重启mosdns) → updater
