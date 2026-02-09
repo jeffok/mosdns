@@ -54,6 +54,8 @@ o33249.ingest.sentry.io
 rum.browser-intake-datadoghq.com
 
 # Google AI / Gemini
+# 主域名（浏览器访问）
+gemini.google.com
 # API 端点
 generativelanguage.googleapis.com
 embeddedgeneration.googleapis.com
