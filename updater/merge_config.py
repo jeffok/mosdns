@@ -46,6 +46,12 @@ def main() -> None:
     site_plugins = (site.get("plugins") or []) if isinstance(site, dict) else []
     base_plugins = base.get("plugins") or []
     
+    # 创建 cache.dump 文件（如果不存在），避免首次启动时的错误日志
+    cache_dump_path = base_dir / "cache.dump"
+    if not cache_dump_path.exists():
+        cache_dump_path.touch()
+        print(f"[merge_config] created {cache_dump_path}")
+    
     # 检查 DoH 证书是否存在
     doh_cert = os.getenv("DOH_CERT", "")
     doh_key = os.getenv("DOH_KEY", "")
