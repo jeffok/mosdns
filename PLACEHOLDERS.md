@@ -13,7 +13,7 @@
 | **sz** | `HKCLOUD_DNS_IP`、`SGPCLOUD_DNS_IP` | 10.100.50.222、100.64.89.1 |
 | **hk** | `SGPCLOUD_DNS_IP` | 100.64.89.1 |
 | **sgp** | 无需配置（使用默认公网 DNS） | - |
-| **dxb** | `HKCLOUD_DNS_DXB_IP` | 10.100.50.222 |
+| **dxb** | `HKCLOUD_DNS_IP` | 10.100.50.222 |
 
 在 `.env` 中配置这些 DNS IP，merge_config 会自动替换 sites.yaml 中的占位符。如不配置则使用默认值。
 

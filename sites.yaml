@@ -1,6 +1,6 @@
 # 各站点 forward / ai_domains 配置，由 merge_config.py 根据环境变量 SITE 选择后与 config.base.yaml 合并生成 config.yaml
 # SITE 取值：sz（深圳家）/ hk（hkcloud）/ sgp（sgpcloud）/ dxb（迪拜家）
-# 占位符由 merge_config.py 根据 SITE 自动替换：<HKCLOUD_DNS_IP>、<SGPCLOUD_DNS_IP>、<HKCLOUD_DNS_DXB_IP>
+# 占位符由 merge_config.py 根据 SITE 自动替换：<HKCLOUD_DNS_IP>、<SGPCLOUD_DNS_IP>
 
 sz:
   plugins:
@@ -101,7 +101,7 @@ dxb:
       args:
         concurrent: 3
         upstreams:
-          - addr: <HKCLOUD_DNS_DXB_IP>:53
+          - addr: <HKCLOUD_DNS_IP>:53
     - tag: forward_global
       type: forward
       args:

@@ -85,8 +85,8 @@ def main() -> None:
         # sgp：不需要替换（使用默认公网 DNS）
         pass
     elif site_name == "dxb":
-        # dxb：需要 hkcloud_dns_dxb
-        replacements["<HKCLOUD_DNS_DXB_IP>"] = os.getenv("HKCLOUD_DNS_DXB_IP", "10.100.50.222")
+        # dxb：需要 hkcloud_dns（与 sz 使用同一个变量）
+        replacements["<HKCLOUD_DNS_IP>"] = os.getenv("HKCLOUD_DNS_IP", "10.100.50.222")
     
     # 替换站点间 DNS 占位符
     for placeholder, value in replacements.items():
