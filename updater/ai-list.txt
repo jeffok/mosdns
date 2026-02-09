@@ -2,7 +2,7 @@
 # 保持精简，避免把过大域（如全量 googleapis.com）拉去新加坡
 
 # ChatGPT / OpenAI
-# 核心域名
+# 核心域名（浏览器访问必需）
 chat.openai.com
 openai.com
 api.openai.com
@@ -10,48 +10,18 @@ auth0.openai.com
 auth.openai.com
 chatgpt.com
 platform.openai.com
-developers.openai.com
-setup.auth.openai.com
-help.openai.com
-# 手机 app 专用域名
-ios.chat.openai.com
-android.chat.openai.com
-# 静态资源域名
+# 静态资源域名（内容加载必需）
 oaiusercontent.com
 oaistatic.com
 cdn.oaistatic.com
 www.oaistatic.com
-# 功能相关域名
-featuregates.org
-featureassets.org
-# 分析和功能开关（手机 app 必需）
-statsig.com
-statsigapi.net
-events.statsigapi.net
-# 客户支持（手机 app 使用）
-intercom.io
-intercomcdn.com
-js.intercomcdn.com
-# 认证和支付服务
-workos.com
-cdn.workos.com
-setup.workos.com
-stripe.com
-# 邮件服务
-ct.sendgrid.net
-# Cloudflare 挑战验证
-challenges.cloudflare.com
-# 语音功能 WebSocket
-chatgpt.livekit.cloud
-# 其他必需服务
-prodregistryv2.org
-# Apple 集成相关（iOS app）
-humb.apple.com
-# 错误追踪（可选但建议添加）
-o207216.ingest.sentry.io
-o33249.ingest.sentry.io
-# 监控服务（可选但建议添加）
-rum.browser-intake-datadoghq.com
+# 手机 app 专用域名
+ios.chat.openai.com
+android.chat.openai.com
+# 开发者相关（可选，按需添加）
+developers.openai.com
+setup.auth.openai.com
+help.openai.com
 
 # Google AI / Gemini
 # 主域名（浏览器访问）
