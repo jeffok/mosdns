@@ -9,13 +9,13 @@ sz:
       args:
         concurrent: 3
         upstreams:
-          - addr: 223.5.5.5
           - addr: 119.29.29.29
+          - addr: 223.5.5.5
           - addr: 114.114.114.114
     - tag: forward_global
       type: forward
       args:
-        concurrent: 3
+        concurrent: 1
         upstreams:
           - addr: <HKCLOUD_DNS_IP>:53
     - tag: forward_ai
@@ -39,8 +39,8 @@ hk:
       args:
         concurrent: 3
         upstreams:
-          - addr: 223.5.5.5
           - addr: 119.29.29.29
+          - addr: 223.5.5.5
           - addr: 114.114.114.114
     - tag: forward_global
       type: forward
@@ -71,19 +71,19 @@ sgp:
       args:
         concurrent: 2
         upstreams:
-          - addr: 223.5.5.5
           - addr: 119.29.29.29
+          - addr: 223.5.5.5
     - tag: forward_global
       type: forward
       args:
-        concurrent: 3
+        concurrent: 2
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
     - tag: forward_ai
       type: forward
       args:
-        concurrent: 3
+        concurrent: 2
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
@@ -99,13 +99,13 @@ dxb:
     - tag: forward_cn
       type: forward
       args:
-        concurrent: 3
+        concurrent: 1
         upstreams:
           - addr: <HKCLOUD_DNS_IP>:53
     - tag: forward_global
       type: forward
       args:
-        concurrent: 3
+        concurrent: 2
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
