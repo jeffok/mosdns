@@ -42,7 +42,7 @@
 /container/envs/add list=ENV_MOSDNS key=SITE value=__SITE__
 /container/envs/add list=ENV_MOSDNS key=MOSDNS_CONFIG_DIR value=/etc/mosdns
 /container/envs/add list=ENV_MOSDNS key=RULES_DIR value=/etc/mosdns/rules
-/container/envs/add list=ENV_MOSDNS key=MOSDNS_LISTEN_PORT value=5353
+/container/envs/add list=ENV_MOSDNS key=MOSDNS_LISTEN_PORT value=53
 /container/envs/add list=ENV_MOSDNS key=DOH_PORT value=8443
 /container/envs/add list=ENV_MOSDNS key=DOH_CERT_DIR value=/etc/mosdns/certs
 /container/envs/add list=ENV_MOSDNS key=ROS_HOST value=172.17.0.1
@@ -66,12 +66,13 @@
 
 # =============================================================================
 # 步骤 6：端口转发（将 __LAN_IP__ 换成实际 LAN IP）
+# DNS 标准端口 53（UDP/TCP）和 DoH 端口 8443
 # =============================================================================
-/ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=5353 protocol=udp to-addresses=172.17.0.2 to-ports=5353
-/ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=5353 protocol=tcp to-addresses=172.17.0.2 to-ports=5353
+/ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=53 protocol=udp to-addresses=172.17.0.2 to-ports=53
+/ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=53 protocol=tcp to-addresses=172.17.0.2 to-ports=53
 /ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=8443 protocol=tcp to-addresses=172.17.0.2 to-ports=8443
 
-# 若需 53 端口作为 DNS，可增加：
+# 若容器内使用非 53 端口（如 5353），需相应调整转发目标端口：
 # /ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=53 protocol=udp to-addresses=172.17.0.2 to-ports=5353
 # /ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=53 protocol=tcp to-addresses=172.17.0.2 to-ports=5353
 
@@ -92,5 +93,5 @@
 
 # =============================================================================
 # 完成后：客户端 DNS 指向 RouterOS LAN IP（__LAN_IP__）
-# 验证： dig @__LAN_IP__ -p 5353 google.com
+# 验证： dig @__LAN_IP__ google.com（标准 53 端口）
 # =============================================================================

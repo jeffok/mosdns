@@ -17,13 +17,13 @@ sz:
       args:
         concurrent: 3
         upstreams:
-          - addr: <HKCLOUD_DNS_IN_TUNNEL_IP>:5353
+          - addr: <HKCLOUD_DNS_IN_TUNNEL_IP>:53
     - tag: forward_ai
       type: forward
       args:
         concurrent: 3
         upstreams:
-          - addr: <SGPCLOUD_DNS_IN_TUNNEL_IP>:5353
+          - addr: <SGPCLOUD_DNS_IN_TUNNEL_IP>:53
           - addr: 1.1.1.1
           - addr: 8.8.8.8
     - tag: ai_domains
@@ -55,7 +55,7 @@ hk:
       args:
         concurrent: 3
         upstreams:
-          - addr: <SGPCLOUD_DNS_IN_TUNNEL_IP>:5353
+          - addr: <SGPCLOUD_DNS_IN_TUNNEL_IP>:53
           - addr: 1.1.1.1
           - addr: 8.8.8.8
     - tag: ai_domains
@@ -101,7 +101,7 @@ dxb:
       args:
         concurrent: 3
         upstreams:
-          - addr: <HKCLOUD_DNS_FOR_DXB_TUNNEL_IP>:5353
+          - addr: <HKCLOUD_DNS_FOR_DXB_TUNNEL_IP>:53
     - tag: forward_global
       type: forward
       args:

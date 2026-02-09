@@ -153,17 +153,18 @@ plugins:
       - exec: jump has_resp_sequence
       - exec: $fallback
 
+  # UDP/TCP DNS 服务器：默认监听 53 端口（标准 DNS 端口）
   - tag: udp_server
     type: udp_server
     args:
       entry: main_sequence
-      listen: "127.0.0.1:{{MOSDNS_LISTEN_PORT}}"
+      listen: "0.0.0.0:{{MOSDNS_LISTEN_PORT}}"
 
   - tag: tcp_server
     type: tcp_server
     args:
       entry: main_sequence
-      listen: "127.0.0.1:{{MOSDNS_LISTEN_PORT}}"
+      listen: "0.0.0.0:{{MOSDNS_LISTEN_PORT}}"
 
   # DoH：端口与证书路径由 merge_config 从环境变量替换（默认 8443，不占 443）
   - tag: doh_server

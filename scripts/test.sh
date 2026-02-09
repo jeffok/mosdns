@@ -1,10 +1,16 @@
 #!/usr/bin/env sh
-# 本地 Docker 测试：规则生成到 rules/，若 5353 被占用则自动选空闲端口，测试结束删除临时文件。
+# 本地 Docker 测试：规则生成到 rules/，若 53 被占用则自动选空闲端口（5353..5362），测试结束删除临时文件。
 set -e
 cd "$(dirname "$0")/.."
 
-# 选一个未被占用的端口（先试 5353，再试 5354..5362）
+# 选一个未被占用的端口（先试 53，再试 5353..5362）
 find_listen_port() {
+  # 先试标准端口 53
+  if ! (lsof -i :53 >/dev/null 2>&1); then
+    echo "53"
+    return
+  fi
+  # 53 被占用则试 5353..5362
   p=5353
   while [ "$p" -le 5362 ]; do
     if ! (lsof -i :"$p" >/dev/null 2>&1); then
@@ -13,7 +19,7 @@ find_listen_port() {
     fi
     p=$((p + 1))
   done
-  echo "5353"
+  echo "53"
 }
 
 PORT=$(find_listen_port)
@@ -47,7 +53,12 @@ done
 
 echo "[test] mosdns status: $(docker compose ps mosdns 2>/dev/null || true)"
 if command -v dig >/dev/null 2>&1; then
-  if dig @127.0.0.1 -p "$PORT" google.com +short +time=2 2>/dev/null | grep -q .; then
+  if [ "$PORT" = "53" ]; then
+    DIG_CMD="dig @127.0.0.1 google.com"
+  else
+    DIG_CMD="dig @127.0.0.1 -p $PORT google.com"
+  fi
+  if $DIG_CMD +short +time=2 2>/dev/null | grep -q .; then
     echo "[test] DNS query OK (port $PORT)"
   else
     echo "[test] DNS query skipped or no reply (port $PORT may be blocked)"

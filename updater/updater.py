@@ -26,7 +26,7 @@ DNS_PORT = int(os.getenv("DNS_PORT", "53"))
 
 TTL_SECONDS = int(os.getenv("TTL_SECONDS", "1800"))
 INTERVAL = int(os.getenv("INTERVAL", "120"))
-DOMAINS_FILE = os.getenv("DOMAINS_FILE", "/etc/mosdns/custom-remote.txt")
+DOMAINS_FILE = os.getenv("DOMAINS_FILE", "/etc/mosdns/rules/custom-remote.txt")
 
 # TLS verify switches
 TLS_VERIFY = os.getenv("TLS_VERIFY", "1").strip() == "1"

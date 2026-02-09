@@ -57,15 +57,17 @@
 
 ```bash
 cp .env.example .env
-# 编辑 .env：SITE、MOSDNS_DATA_DIR、DOH_CERT_DIR、ROS_* 等
+# 编辑 .env：SITE、ROS_* 等（路径相关变量可不设置，默认使用项目根目录）
 ```
 
-确保 `${MOSDNS_DATA_DIR}` 下已有：
+确保项目根目录下已有：
 - `config.base.yaml`、`sites.yaml`（多站点需在 sites.yaml 中替换占位符，见 [PLACEHOLDERS.md](PLACEHOLDERS.md)）
-- `updater/` 目录（本仓库整个 `updater/` 复制过去）
-- DoH 证书：`${DOH_CERT_DIR}` 内含 `fullchain.pem`、`privkey.pem`
+- `updater/` 目录（本仓库整个 `updater/` 目录）
+- `certs/` 目录（内含 `fullchain.pem`、`privkey.pem`）
 
 **SITE**：`sz` / `hk` / `sgp` / `dxb`，按当前站点选择。
+
+**路径说明**：默认使用项目根目录，无需设置 `MOSDNS_DATA_DIR` 和 `DOH_CERT_DIR`。如需自定义路径，可在 `.env` 中设置。
 
 ### 2. 启动
 
@@ -75,8 +77,14 @@ cp .env.example .env
 
 ### 3. 验证
 
-- DNS：`dig @127.0.0.1 -p 5353 google.com`
-- DoH：`https://你的域名:8443/dns-query`
+- DNS（标准端口）：`dig @127.0.0.1 google.com` 或 `dig @127.0.0.1 -p 53 google.com`
+- DoH（额外服务）：`https://你的域名:8443/dns-query`
+
+**端口说明**：
+- **DNS 端口**：默认 `MOSDNS_LISTEN_PORT=53`（UDP/TCP），标准 DNS 端口，直接绑定到宿主机
+- **DoH 端口**：默认 `DOH_PORT=8443`，作为额外服务提供，不影响标准 DNS 53 端口
+- 使用 `network_mode: host`，端口直接绑定到宿主机，无需端口映射
+- 若 53 端口被占用，可在 `.env` 中设置 `MOSDNS_LISTEN_PORT=5353` 等
 
 ### 4. 每日规则更新（Docker Compose）
 
@@ -140,7 +148,7 @@ disk1/mosdns/
 # SITE 按当前站点改为 sz / hk / sgp / dxb
 /container/envs/add list=ENV_MOSDNS key=MOSDNS_CONFIG_DIR value=/etc/mosdns
 /container/envs/add list=ENV_MOSDNS key=RULES_DIR value=/etc/mosdns/rules
-/container/envs/add list=ENV_MOSDNS key=MOSDNS_LISTEN_PORT value=5353
+/container/envs/add list=ENV_MOSDNS key=MOSDNS_LISTEN_PORT value=53
 /container/envs/add list=ENV_MOSDNS key=DOH_PORT value=8443
 /container/envs/add list=ENV_MOSDNS key=DOH_CERT_DIR value=/etc/mosdns/certs
 /container/envs/add list=ENV_MOSDNS key=ROS_HOST value=172.17.0.1
@@ -171,22 +179,15 @@ disk1/mosdns/
 
 ### 7. 端口转发与 DNS
 
-将 LAN 的 5353、8443 转到容器 IP `172.17.0.2`（将 `192.168.88.1` 换成 RouterOS LAN IP）：
+将 LAN 的 53（DNS）、8443（DoH）转到容器 IP `172.17.0.2`（将 `192.168.88.1` 换成 RouterOS LAN IP）：
 
 ```routeros
-/ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=5353 protocol=udp to-addresses=172.17.0.2 to-ports=5353
-/ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=5353 protocol=tcp to-addresses=172.17.0.2 to-ports=5353
+/ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=53 protocol=udp to-addresses=172.17.0.2 to-ports=53
+/ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=53 protocol=tcp to-addresses=172.17.0.2 to-ports=53
 /ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=8443 protocol=tcp to-addresses=172.17.0.2 to-ports=8443
 ```
 
-客户端 DNS 指向 RouterOS LAN IP。若需 53 端口作为 DNS，可增加：
-
-```routeros
-/ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=53 protocol=udp to-addresses=172.17.0.2 to-ports=5353
-/ip/firewall/nat/add chain=dstnat dst-address=192.168.88.1 dst-port=53 protocol=tcp to-addresses=172.17.0.2 to-ports=5353
-```
-
-（将 `192.168.88.1` 换成 RouterOS LAN IP）
+客户端 DNS 指向 RouterOS LAN IP（标准 53 端口）。若容器内使用非 53 端口（如 5353），需相应调整转发目标端口。
 
 ### 8. 每日规则更新与 mosdns 重启
 
@@ -217,7 +218,7 @@ updater 内 crond 会在 5:00 北京时间更新规则文件；RouterOS 无 dock
 ### 9. 验证（RouterOS）
 
 - 将客户端 DNS 指向 RouterOS LAN IP（如 192.168.88.1）
-- `dig @192.168.88.1 -p 5353 google.com`（或 `dig @LAN_IP -p 53` 若已配置 53 转发）
+- `dig @192.168.88.1 google.com`（标准 53 端口，或 `dig @LAN_IP -p 53`）
 - DoH：`https://你的域名:8443/dns-query`
 
 ---
@@ -228,7 +229,7 @@ updater 内 crond 会在 5:00 北京时间更新规则文件；RouterOS 无 dock
 ./scripts/test.sh
 ```
 
-脚本会：自动选择空闲端口（5353 被占用时使用 5354～5362）、生成规则、启动服务、执行 DNS 查询，结束后删除临时文件。使用 `--build` 保证测试最新代码。
+脚本会：自动选择空闲端口（53 被占用时使用 5353～5362）、生成规则、启动服务、执行 DNS 查询，结束后删除临时文件。使用 `--build` 保证测试最新代码。
 
 ---
 

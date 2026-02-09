@@ -40,7 +40,7 @@ def main() -> None:
     merged = {**base, "plugins": site_plugins + base_plugins}
 
     out_text = yaml.dump(merged, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    listen_port = os.getenv("MOSDNS_LISTEN_PORT", "5353")
+    listen_port = os.getenv("MOSDNS_LISTEN_PORT", "53")
     doh_port = os.getenv("DOH_PORT", "8443")
     doh_cert_dir = os.getenv("DOH_CERT_DIR", "/etc/mosdns/certs")
     out_text = (

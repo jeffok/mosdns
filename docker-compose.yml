@@ -1,6 +1,7 @@
 # MosDNS 分流 + 内置 DoH（http_server），端口由 DOH_PORT 控制，默认 8443
-# 部署前：复制 .env.example 为 .env，填 SITE、证书路径、隧道 IP 等
-# 目录约定：${MOSDNS_DATA_DIR} 下放 config.base.yaml、sites.yaml、updater/；按 SITE 生成 config.yaml，规则生成到 rules/
+# 部署前：复制 .env.example 为 .env，填 SITE、ROS_* 等
+# 目录约定：项目根目录下放 config.base.yaml、sites.yaml、updater/；按 SITE 生成 config.yaml，规则生成到 rules/
+# 注意：使用 network_mode: host，端口直接绑定到宿主机
 
 services:
   mosdns:
@@ -12,8 +13,8 @@ services:
       updater:
         condition: service_healthy
     volumes:
-      - ${MOSDNS_DATA_DIR:-/data/mosdns}:/etc/mosdns
-      - ${DOH_CERT_DIR:-/data/mosdns/certs}:/etc/mosdns/certs:ro
+      - ${MOSDNS_DATA_DIR:-.}:/etc/mosdns
+      - ${DOH_CERT_DIR:-./certs}:/etc/mosdns/certs:ro
     command: ["mosdns", "start", "-c", "/etc/mosdns/config.yaml"]
 
   updater:
@@ -25,8 +26,8 @@ services:
     network_mode: host
     restart: unless-stopped
     volumes:
-      - ${MOSDNS_DATA_DIR:-/data/mosdns}:/etc/mosdns
-      - ${MOSDNS_DATA_DIR:-/data/mosdns}/updater:/app:ro
+      - ${MOSDNS_DATA_DIR:-.}:/etc/mosdns
+      - ${MOSDNS_DATA_DIR:-.}/updater:/app:ro
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "test", "-f", "/etc/mosdns/rules/direct-list.txt"]
@@ -59,7 +60,7 @@ services:
       TLS_TIMEOUT: ${TLS_TIMEOUT:-2.5}
       TLS_CACHE_TTL: ${TLS_CACHE_TTL:-1800}
       TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
-      MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-5353}
+      MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-53}
       DOH_PORT: ${DOH_PORT:-8443}
       DOH_CERT_DIR: "/etc/mosdns/certs"
       MOSDNS_CONTAINER_NAME: ${MOSDNS_CONTAINER_NAME:-mosdns}
