@@ -16,8 +16,12 @@ ROUTER_PASS = os.getenv("ROS_PASS", "ChangeMeStrong!")
 
 LIST_NAME = os.getenv("ROS_LIST", "chatgpt-sgp")
 COMMENT = os.getenv("ROS_COMMENT", "mosdns-chatgpt")
+# AI 域名解析出的 IP 写入的 address-list（与 ROS_LIST 分离，便于策略路由）
+ROS_AI_LIST = os.getenv("ROS_AI_LIST", "ai-sgp")
+ROS_AI_COMMENT = os.getenv("ROS_AI_COMMENT", "mosdns-ai")
+AI_DOMAINS_FILE = os.getenv("AI_DOMAINS_FILE", "/etc/mosdns/rules/ai-list.txt")
 
-DNS_SERVER = os.getenv("DNS_SERVER", "127.0.0.1")
+DNS_SERVER = os.getenv("DNS_SERVER", "1.1.1.1")
 DNS_PORT = int(os.getenv("DNS_PORT", "53"))
 
 TTL_SECONDS = int(os.getenv("TTL_SECONDS", "1800"))
@@ -277,8 +281,8 @@ def kv_from_sentence(sentence: List[str]) -> Dict[str, str]:
         d[k] = v
     return d
 
-def get_existing(sock: socket.socket) -> Dict[str, str]:
-    rep = ros_talk(sock, ["/ip/firewall/address-list/print", f"?list={LIST_NAME}"])
+def get_existing(sock: socket.socket, list_name: str, comment: str) -> Dict[str, str]:
+    rep = ros_talk(sock, ["/ip/firewall/address-list/print", f"?list={list_name}"])
     m: Dict[str, str] = {}
     for s in rep:
         if not s:
@@ -286,30 +290,62 @@ def get_existing(sock: socket.socket) -> Dict[str, str]:
         if s[0] != "!re":
             continue
         fields = kv_from_sentence(s[1:])
-        _id = fields.get(".id") or fields.get("id")  # some versions may vary
+        _id = fields.get(".id") or fields.get("id")
         addr = fields.get("address")
         cmt = fields.get("comment")
-        if _id and addr and cmt == COMMENT:
+        if _id and addr and cmt == comment:
             m[addr] = _id
     return m
 
-def ensure(sock: socket.socket, addr: str, existing: Dict[str, str]) -> None:
+def ensure(sock: socket.socket, addr: str, existing: Dict[str, str], list_name: str, comment: str) -> None:
     timeout = f"{TTL_SECONDS}s"
     if addr in existing:
         ros_talk(sock, [
             "/ip/firewall/address-list/set",
             f"=.id={existing[addr]}",
             f"=timeout={timeout}",
-            f"=comment={COMMENT}",
+            f"=comment={comment}",
         ])
     else:
         ros_talk(sock, [
             "/ip/firewall/address-list/add",
-            f"=list={LIST_NAME}",
+            f"=list={list_name}",
             f"=address={addr}",
             f"=timeout={timeout}",
-            f"=comment={COMMENT}",
+            f"=comment={comment}",
         ])
+
+def update_ros_list(
+    sock: socket.socket,
+    domains_file: str,
+    list_name: str,
+    comment: str,
+) -> None:
+    """解析域名，TLS 校验后写入 RouterOS address-list。"""
+    domains = read_domains(domains_file)
+    if not domains:
+        log(f"[WARN] domains list empty: {domains_file}")
+        return
+    domain_to_ips: Dict[str, List[str]] = {}
+    for d in domains:
+        ips = dns_query_a(d)
+        if ips:
+            domain_to_ips[d] = ips
+    if not domain_to_ips:
+        log(f"[WARN] no A records resolved: {domains_file}")
+        return
+    ips_ok = filter_ips_by_tls(domain_to_ips)
+    if TLS_VERIFY:
+        ips_before = set(ip for ips in domain_to_ips.values() for ip in ips)
+        log(f"[INFO] resolved {len(ips_before)} ips, tls-ok {len(ips_ok)} ips for list={list_name}")
+    if not ips_ok:
+        log(f"[WARN] tls-ok ip set empty, skip writing list={list_name} this round")
+        return
+    existing = get_existing(sock, list_name, comment)
+    for ip in sorted(ips_ok):
+        ensure(sock, ip, existing, list_name, comment)
+    log(f"[OK] updated {len(ips_ok)} ips to ROS list={list_name} comment={comment}")
+
 
 # =========================
 # Main loop
@@ -317,51 +353,20 @@ def ensure(sock: socket.socket, addr: str, existing: Dict[str, str]) -> None:
 def main() -> None:
     log(
         f"[INFO] updater started. DNS={DNS_SERVER}:{DNS_PORT}, "
-        f"ROS={ROUTER_HOST}:{ROUTER_PORT}, list={LIST_NAME}, "
+        f"ROS={ROUTER_HOST}:{ROUTER_PORT}, list={LIST_NAME}, ai_list={ROS_AI_LIST}, "
         f"tls_verify={TLS_VERIFY}, tls_verify_host={TLS_VERIFY_HOST or '(per-domain)'}"
     )
 
     while True:
         try:
-            domains = read_domains(DOMAINS_FILE)
-            if not domains:
-                log("[WARN] domains list empty, sleep...")
-                time.sleep(INTERVAL)
-                continue
-
-            domain_to_ips: Dict[str, List[str]] = {}
-            for d in domains:
-                ips = dns_query_a(d)
-                if ips:
-                    domain_to_ips[d] = ips
-
-            if not domain_to_ips:
-                log("[WARN] no A records resolved, sleep...")
-                time.sleep(INTERVAL)
-                continue
-
-            ips_before = set(ip for ips in domain_to_ips.values() for ip in ips)
-            ips_ok = filter_ips_by_tls(domain_to_ips)
-            if TLS_VERIFY:
-                log(f"[INFO] resolved {len(ips_before)} ips, tls-ok {len(ips_ok)} ips")
-
-            if not ips_ok:
-                log("[WARN] tls-ok ip set empty, skip writing to ROS this round")
-                time.sleep(INTERVAL)
-                continue
-
             sock = socket.create_connection((ROUTER_HOST, ROUTER_PORT), timeout=4)
             sock.settimeout(4)
             try:
                 ros_login(sock)
-                existing = get_existing(sock)
-                for ip in sorted(ips_ok):
-                    ensure(sock, ip, existing)
+                update_ros_list(sock, DOMAINS_FILE, LIST_NAME, COMMENT)
+                update_ros_list(sock, AI_DOMAINS_FILE, ROS_AI_LIST, ROS_AI_COMMENT)
             finally:
                 sock.close()
-
-            log(f"[OK] updated {len(ips_ok)} ips to ROS list={LIST_NAME} comment={COMMENT}")
-
         except Exception as e:
             log(f"[ERR] {e}")
 

@@ -1,0 +1,15 @@
+# AI 域名列表（仅用于分流到 forward_ai，控制走 SGP/新加坡）
+# 保持精简，避免把过大域（如全量 googleapis.com）拉去新加坡
+# ChatGPT / OpenAI
+chat.openai.com
+openai.com
+api.openai.com
+auth0.openai.com
+auth.openai.com
+chatgpt.com
+oaiusercontent.com
+oaistatic.com
+cdn.oaistatic.com
+# Google AI（按需取消注释）
+# generativelanguage.googleapis.com
+# embeddedgeneration.googleapis.com
