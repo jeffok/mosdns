@@ -1,6 +1,6 @@
 #!/bin/sh
-# 每日 5:00 北京时间执行：更新规则并重启 mosdns 使规则生效
-# 由 crond 调用，需设置 TZ=Asia/Shanghai 及 RULES_DIR 等环境变量（见 Dockerfile 中 crontab）
+# 每日定时更新规则并重启 mosdns 使规则生效
+# 由 crond 调用，时间和时区从环境变量 TZ 和 DAILY_UPDATE_TIME 读取（默认 Asia/Shanghai 5:00）
 
 echo "[daily_update] $(date) starting..."
 python -u /app/gen_custom_rules.py || exit 1

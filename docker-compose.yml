@@ -49,12 +49,10 @@ services:
       ROS_COMMENT: ${ROS_COMMENT:-mosdns-chatgpt}
       ROS_AI_LIST: ${ROS_AI_LIST:-ai-sgp}
       ROS_AI_COMMENT: ${ROS_AI_COMMENT:-mosdns-ai}
-      AI_DOMAINS_FILE: ${AI_DOMAINS_FILE:-/etc/mosdns/rules/ai-list.txt}
-      DNS_SERVER: ${DNS_SERVER:-1.1.1.1}
-      DNS_PORT: ${DNS_PORT:-53}
       TTL_SECONDS: ${TTL_SECONDS:-1800}
       INTERVAL: ${INTERVAL:-120}
-      DOMAINS_FILE: ${DOMAINS_FILE:-/etc/mosdns/rules/custom-remote.txt}
+      DNS_SERVER: ${DNS_SERVER:-1.1.1.1}
+      DNS_PORT: ${DNS_PORT:-53}
       TLS_VERIFY: ${TLS_VERIFY:-1}
       TLS_PORT: ${TLS_PORT:-443}
       TLS_TIMEOUT: ${TLS_TIMEOUT:-2.5}
@@ -63,5 +61,6 @@ services:
       MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-53}
       DOH_PORT: ${DOH_PORT:-8443}
       DOH_CERT_DIR: "/etc/mosdns/certs"
-      MOSDNS_CONTAINER_NAME: ${MOSDNS_CONTAINER_NAME:-mosdns}
-    # entrypoint：merge_config → gen_custom_rules → crond(每日5点更新规则并重启mosdns) → updater
+      TZ: ${TZ:-Asia/Shanghai}
+      DAILY_UPDATE_TIME: ${DAILY_UPDATE_TIME:-05:00}
+    # entrypoint：merge_config → gen_custom_rules → crond(每日更新规则并重启mosdns) → updater
