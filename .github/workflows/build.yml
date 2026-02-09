@@ -1,0 +1,51 @@
+# 提交代码后自动构建 mosdns-updater 镜像并推送至 Docker Hub (jeffok/mosdns-updater)
+# 前置：在 GitHub 设置 Secret：DOCKERHUB_TOKEN（Docker Hub Access Token）
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+env:
+  DOCKERHUB_USERNAME: jeffok
+  IMAGE_NAME: mosdns-updater
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set tags
+        id: tags
+        run: |
+          REPO="${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"
+          TAGS="${REPO}:latest"
+          TAGS="${TAGS},${REPO}:${GITHUB_SHA::7}"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAGS="${TAGS},${REPO}:${{ github.event.release.tag_name }}"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./updater
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

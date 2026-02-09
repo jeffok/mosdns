@@ -34,7 +34,7 @@ export SITE=sgp
 export MOSDNS_LISTEN_PORT="$PORT"
 
 echo "[test] starting compose..."
-docker compose up -d
+docker compose up -d --build
 
 # 等待健康
 echo "[test] waiting for healthy..."

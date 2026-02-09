@@ -17,10 +17,10 @@ services:
     command: ["mosdns", "start", "-c", "/etc/mosdns/config.yaml"]
 
   updater:
+    image: jeffok/mosdns-updater:latest
     build:
       context: ./updater
       dockerfile: Dockerfile
-    image: mosdns-updater:local
     container_name: mosdns-updater
     network_mode: host
     restart: unless-stopped
@@ -61,9 +61,4 @@ services:
       MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-5353}
       DOH_PORT: ${DOH_PORT:-8443}
       DOH_CERT_DIR: "/etc/mosdns/certs"
-    command: >
-      sh -c "
-        python -u /app/merge_config.py;
-        python -u /app/gen_custom_rules.py;
-        python -u /app/updater.py
-      "
+    # 使用镜像默认 CMD（entrypoint.sh：merge_config → gen_custom_rules → updater）
