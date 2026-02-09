@@ -61,6 +61,9 @@ services:
       DOH_PORT: ${DOH_PORT:-8443}
       DOH_CERT: ${DOH_CERT:-}
       DOH_KEY: ${DOH_KEY:-}
+      HKCLOUD_DNS_IN_TUNNEL_IP: ${HKCLOUD_DNS_IN_TUNNEL_IP:-10.100.50.222}
+      SGPCLOUD_DNS_IN_TUNNEL_IP: ${SGPCLOUD_DNS_IN_TUNNEL_IP:-100.64.89.1}
+      HKCLOUD_DNS_FOR_DXB_TUNNEL_IP: ${HKCLOUD_DNS_FOR_DXB_TUNNEL_IP:-10.100.50.222}
       TZ: ${TZ:-Asia/Shanghai}
       DAILY_UPDATE_TIME: ${DAILY_UPDATE_TIME:-05:00}
     # entrypoint：merge_config → gen_custom_rules → crond(每日更新规则并重启mosdns) → updater

@@ -72,7 +72,33 @@ def main() -> None:
     listen_port = os.getenv("MOSDNS_LISTEN_PORT", "53")
     doh_port = os.getenv("DOH_PORT", "8443")
     
-    # 替换占位符
+    # 根据 SITE 替换站点间 DNS 占位符
+    replacements = {}
+    if site_name == "sz":
+        # sz：需要 hkcloud_dns 和 sgpcloud_dns
+        replacements["<HKCLOUD_DNS_IN_TUNNEL_IP>"] = os.getenv("HKCLOUD_DNS_IN_TUNNEL_IP", "10.100.50.222")
+        replacements["<SGPCLOUD_DNS_IN_TUNNEL_IP>"] = os.getenv("SGPCLOUD_DNS_IN_TUNNEL_IP", "100.64.89.1")
+    elif site_name == "hk":
+        # hk：只需要 sgpcloud_dns
+        replacements["<SGPCLOUD_DNS_IN_TUNNEL_IP>"] = os.getenv("SGPCLOUD_DNS_IN_TUNNEL_IP", "100.64.89.1")
+    elif site_name == "sgp":
+        # sgp：不需要替换（使用默认公网 DNS）
+        pass
+    elif site_name == "dxb":
+        # dxb：需要 hkcloud_dns_for_dxb
+        replacements["<HKCLOUD_DNS_FOR_DXB_TUNNEL_IP>"] = os.getenv("HKCLOUD_DNS_FOR_DXB_TUNNEL_IP", "10.100.50.222")
+    
+    # 替换站点间 DNS 占位符
+    for placeholder, value in replacements.items():
+        out_text = out_text.replace(placeholder, value)
+    
+    # 检查是否还有未替换的占位符
+    import re
+    remaining_placeholders = re.findall(r"<[A-Z_]+>", out_text)
+    if remaining_placeholders:
+        print(f"[merge_config] WARN: Unreplaced placeholders found: {set(remaining_placeholders)}", file=sys.stderr)
+    
+    # 替换端口和证书占位符
     out_text = out_text.replace("{{MOSDNS_LISTEN_PORT}}", listen_port)
     
     if enable_doh:

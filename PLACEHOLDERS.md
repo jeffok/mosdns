@@ -4,19 +4,18 @@
 
 ---
 
-## 1. 站点占位符（sites.yaml）
+## 1. 站点间 DNS 配置
 
-由环境变量 **SITE** 选择站点（sz / hk / sgp / dxb），merge_config 从 sites.yaml 取对应配置与 config.base.yaml 合并。将下列占位符换成实际隧道内网 IP，**站点间通信使用标准 DNS 端口 53**。
+由环境变量 **SITE** 选择站点（sz / hk / sgp / dxb），merge_config 自动根据 SITE 替换占位符。**站点间通信使用标准 DNS 端口 53**。
 
-| 占位符 | 含义 | 出现在 |
-|--------|------|--------|
-| `<HKCLOUD_DNS_IN_TUNNEL_IP>` | szhome → hkcloud 的隧道内网 IP | sz `forward_global` |
-| `<SGPCLOUD_DNS_IN_TUNNEL_IP>` | hkcloud/szhome → sgpcloud 的隧道内网 IP | sz、hk `forward_ai` |
-| `<HKCLOUD_DNS_FOR_DXB_TUNNEL_IP>` | dxbhome → hkcloud（深圳侧）的隧道内网 IP | dxb `forward_cn` |
+| SITE | 需要的 DNS 配置 | 默认值 |
+|------|----------------|--------|
+| **sz** | `HKCLOUD_DNS_IN_TUNNEL_IP`、`SGPCLOUD_DNS_IN_TUNNEL_IP` | 10.100.50.222、100.64.89.1 |
+| **hk** | `SGPCLOUD_DNS_IN_TUNNEL_IP` | 100.64.89.1 |
+| **sgp** | 无需配置（使用默认公网 DNS） | - |
+| **dxb** | `HKCLOUD_DNS_FOR_DXB_TUNNEL_IP` | 10.100.50.222 |
 
-- **hk**：直接写 223.5.5.5、1.1.1.1 等；forward_ai 写 sgpcloud 隧道 IP:53
-- **sgp**：全部公网 DNS 即可，无占位符
-- **dxb**：仅 forward_cn 用 `<HKCLOUD_DNS_FOR_DXB_TUNNEL_IP>:53`
+在 `.env` 中配置这些 DNS IP，merge_config 会自动替换 sites.yaml 中的占位符。如不配置则使用默认值。
 
 ---
 
