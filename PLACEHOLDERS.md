@@ -8,12 +8,12 @@
 
 由环境变量 **SITE** 选择站点（sz / hk / sgp / dxb），merge_config 自动根据 SITE 替换占位符。**站点间通信使用标准 DNS 端口 53**。
 
-| SITE | 需要的 DNS 配置 | 默认值 |
-|------|----------------|--------|
-| **sz** | `HKCLOUD_DNS_IP`、`SGPCLOUD_DNS_IP` | 10.100.50.222、100.64.89.1 |
-| **hk** | `SGPCLOUD_DNS_IP` | 100.64.89.1 |
-| **sgp** | 无需配置（使用默认公网 DNS） | - |
-| **dxb** | `HKCLOUD_DNS_IP` | 10.100.50.222 |
+| SITE | 需要的 DNS 配置 | 默认值 | 说明 |
+|------|----------------|--------|------|
+| **sz** | `HKCLOUD_DNS_IP`、`SGPCLOUD_DNS_IP` | 10.100.50.222、100.64.89.1 | forward_global 和 forward_ai 使用内网 DNS |
+| **hk** | `SGPCLOUD_DNS_IP` | 100.64.89.1 | forward_global 使用公网 DNS，forward_ai 使用内网 DNS |
+| **sgp** | 无需配置 | - | 所有 forward 使用公网 DNS（1.1.1.1、8.8.8.8、9.9.9.9） |
+| **dxb** | `HKCLOUD_DNS_IP` | 10.100.50.222 | forward_cn 使用内网 DNS，forward_global 和 forward_ai 使用公网 DNS |
 
 在 `.env` 中配置这些 DNS IP，merge_config 会自动替换 sites.yaml 中的占位符。如不配置则使用默认值。
 

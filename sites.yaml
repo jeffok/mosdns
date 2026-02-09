@@ -21,11 +21,9 @@ sz:
     - tag: forward_ai
       type: forward
       args:
-        concurrent: 3
+        concurrent: 1
         upstreams:
           - addr: <SGPCLOUD_DNS_IP>:53
-          - addr: 1.1.1.1
-          - addr: 8.8.8.8
     - tag: ai_domains
       type: domain_set
       args:
@@ -53,11 +51,9 @@ hk:
     - tag: forward_ai
       type: forward
       args:
-        concurrent: 3
+        concurrent: 1
         upstreams:
           - addr: <SGPCLOUD_DNS_IP>:53
-          - addr: 1.1.1.1
-          - addr: 8.8.8.8
     - tag: ai_domains
       type: domain_set
       args:
@@ -69,24 +65,27 @@ sgp:
     - tag: forward_cn
       type: forward
       args:
-        concurrent: 2
+        concurrent: 3
         upstreams:
-          - addr: 119.29.29.29
-          - addr: 223.5.5.5
+          - addr: 1.1.1.1
+          - addr: 8.8.8.8
+          - addr: 9.9.9.9
     - tag: forward_global
       type: forward
       args:
-        concurrent: 2
+        concurrent: 3
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
+          - addr: 9.9.9.9
     - tag: forward_ai
       type: forward
       args:
-        concurrent: 2
+        concurrent: 3
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
+          - addr: 9.9.9.9
     - tag: ai_domains
       type: domain_set
       args:
@@ -94,7 +93,7 @@ sgp:
           - "/etc/mosdns/rules/ai-list.txt"
 
 dxb:
-  # 迪拜家：默认走本地；仅 CN 走 hkcloud DNS（深圳侧）
+  # 迪拜家：CN 走 hkcloud DNS（深圳侧），global 和 ai 走公网 DNS
   plugins:
     - tag: forward_cn
       type: forward
@@ -105,17 +104,19 @@ dxb:
     - tag: forward_global
       type: forward
       args:
-        concurrent: 2
+        concurrent: 3
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
+          - addr: 9.9.9.9
     - tag: forward_ai
       type: forward
       args:
-        concurrent: 2
+        concurrent: 3
         upstreams:
           - addr: 1.1.1.1
           - addr: 8.8.8.8
+          - addr: 9.9.9.9
     - tag: ai_domains
       type: domain_set
       args:
