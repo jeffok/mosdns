@@ -27,6 +27,7 @@ services:
     volumes:
       - ${MOSDNS_DATA_DIR:-/data/mosdns}:/etc/mosdns
       - ${MOSDNS_DATA_DIR:-/data/mosdns}/updater:/app:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "test", "-f", "/etc/mosdns/rules/direct-list.txt"]
       interval: 3s
@@ -61,4 +62,5 @@ services:
       MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-5353}
       DOH_PORT: ${DOH_PORT:-8443}
       DOH_CERT_DIR: "/etc/mosdns/certs"
-    # 使用镜像默认 CMD（entrypoint.sh：merge_config → gen_custom_rules → updater）
+      MOSDNS_CONTAINER_NAME: ${MOSDNS_CONTAINER_NAME:-mosdns}
+    # entrypoint：merge_config → gen_custom_rules → crond(每日5点更新规则并重启mosdns) → updater

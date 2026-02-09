@@ -9,6 +9,7 @@
 - **多站点**：sz（深圳家）、hk（香港云）、sgp（新加坡云）、dxb（迪拜家），由 `SITE` 选择
 - **RouterOS 联动**：updater 将域名解析 IP 写入 address-list（remote 与 ai 分开），供策略路由使用
 - **规则生成**：启动时下载/生成规则到 `rules/`，下载失败保留原文件
+- **每日更新**：北京时间 5:00 自动更新规则并重启 mosdns（Docker Compose 部署）
 
 ## 目录结构
 
@@ -21,6 +22,7 @@
 ├── updater/
 │   ├── merge_config.py     # 按 SITE 合并生成 config.yaml
 │   ├── gen_custom_rules.py # 生成/下载规则到 rules/
+│   ├── daily_update.sh     # 每日 5:00 北京时间更新规则并重启 mosdns
 │   ├── updater.py          # 解析域名写入 ROS address-list
 │   ├── custom.txt          # custom 规则源
 │   ├── ai-list.txt         # AI 域名源
@@ -77,7 +79,8 @@ cp .env.example .env
 
 ## 在 RouterOS Container 中部署
 
-RouterOS v7.4+ 支持 Container，可在设备上直接运行 MosDNS。**不支持 docker-compose**，需逐个添加容器。updater 可直接从 Docker Hub 拉取（`remote-image`），无需本地构建。
+RouterOS v7.4+ 支持 Container，可在设备上直接运行 MosDNS。**不支持 docker-compose**，需逐个添加容器。updater 可直接从 Docker Hub 拉取（`remote-image`），无需本地构建。  
+> **每日规则更新**：RouterOS 无 docker socket，updater 内 crond 仍会在 5:00 北京时间更新规则文件，但无法自动重启 mosdns，需手动重启或另配定时任务。
 
 ### 前提条件
 
