@@ -25,7 +25,7 @@
 /container/envs/add list=ENV_MOSDNS key=TZ value=__TZ__
 
 # --- 步骤 4：添加并启动 mosdns ---
-# 使用自定义镜像（含 entrypoint.sh 自动下载规则 + crond 定时重启）
+# 使用自定义镜像（entrypoint 循环：拉规则 → 启动 mosdns → 等待；crond 04:30 杀 mosdns 进程触发重载规则，不重启容器）
 /container/add remote-image=jeffok/mosdns:latest interface=veth-mosdns root-dir=disk1/images/mosdns mountlists=MOUNT_MOSDNS envlist=ENV_MOSDNS name=mosdns start-on-boot=yes logging=yes
 /container/start mosdns
 
@@ -33,17 +33,13 @@
 /ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=53 protocol=udp to-addresses=172.17.0.2 to-ports=53
 /ip/firewall/nat/add chain=dstnat dst-address=__LAN_IP__ dst-port=53 protocol=tcp to-addresses=172.17.0.2 to-ports=53
 
-# --- 步骤 6：每日重启 ---
-# entrypoint.sh 中 crond 在 04:30 执行 kill PID1 使容器停止
-# RouterOS scheduler 在 04:35 重新启动容器（触发 entrypoint 重新下载规则）
-
-/system/clock/set time-zone-name=__TZ__
-
-/system/script/add name=mosdns-restart source={
+# --- 步骤 6：自动拉起 ---
+# 每 5 分钟执行 start（已运行则 no-op；容器崩溃时拉起）
+# 每日规则更新在容器内由 crond 04:30 杀 mosdns 进程，entrypoint 循环自动重新拉规则并重启 mosdns，无需重启容器
+/system/script/add name=mosdns-watchdog source={
   /container/start mosdns
 }
-
-/system/scheduler/add name=mosdns-daily-restart interval=1d start-time=04:35:00 on-event=mosdns-restart
+/system/scheduler/add name=mosdns-watchdog interval=5m on-event=mosdns-watchdog
 
 # =============================================================================
 # 完成后：客户端 DNS 指向 __LAN_IP__

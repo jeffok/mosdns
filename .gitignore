@@ -1,4 +1,4 @@
-# 运行时生成（容器 entrypoint 下载）
+# 运行时生成（entrypoint 循环内 wget 下载）
 rules/direct-list.txt
 rules/china_ip_list.txt
 rules/apple-cn.txt
