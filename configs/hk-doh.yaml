@@ -31,16 +31,6 @@ plugins:
   args:
     files:
     - /etc/mosdns/rules/ai-list.txt
-- tag: doh_server
-  type: http_server
-  args:
-    entries:
-    - path: /dns-query
-      exec: main_sequence
-    listen: 0.0.0.0:8443
-    cert: __DOH_CERT__
-    key: __DOH_KEY__
-    idle_timeout: 10
 - tag: custom_hosts
   type: hosts
   args:
@@ -162,3 +152,13 @@ plugins:
   args:
     entry: main_sequence
     listen: 0.0.0.0:53
+- tag: doh_server
+  type: http_server
+  args:
+    entries:
+    - path: /dns-query
+      exec: main_sequence
+    listen: 0.0.0.0:8443
+    cert: __DOH_CERT__
+    key: __DOH_KEY__
+    idle_timeout: 10
