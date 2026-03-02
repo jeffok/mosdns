@@ -7,6 +7,12 @@ log() {
   echo "[entrypoint] $*"
 }
 
+# 若宿主机未注入 DNS（如 ROS 容器内 wget 无法解析），通过 CONTAINER_DNS 写入 resolv.conf
+if [ -n "$CONTAINER_DNS" ]; then
+  echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
+  log "resolv.conf <- $CONTAINER_DNS"
+fi
+
 # 根据 SITE、DOH_ENABLED 选用配置；DoH 开启（1/true/yes）时用 <site>-doh.yaml 并替换证书路径
 SITE=${SITE:-sz}
 case "$SITE" in hk|sz|dxb) ;; *) SITE=sz;; esac
