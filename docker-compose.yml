@@ -1,68 +1,13 @@
-# MosDNS 分流 + 内置 DoH（http_server），端口由 DOH_PORT 控制，默认 8443
-# 部署前：复制 .env.example 为 .env，填 SITE、ROS_* 等
-# 目录约定：项目根目录下放 config.base.yaml、sites.yaml、updater/；按 SITE 生成 config.yaml，规则生成到 rules/
-# 注意：使用 network_mode: host，端口直接绑定到宿主机
-
 services:
   mosdns:
-    image: irinesistiana/mosdns:v5.3.3
+    image: jeffok/mosdns:latest
     container_name: mosdns
     network_mode: host
     restart: unless-stopped
-    depends_on:
-      updater:
-        condition: service_healthy
     volumes:
-      - ${MOSDNS_DATA_DIR:-.}:/etc/mosdns
-    command: ["mosdns", "start", "-c", "/etc/mosdns/config.yaml"]
-
-  updater:
-    image: jeffok/mosdns-updater:latest
-    build:
-      context: ./updater
-      dockerfile: Dockerfile
-    container_name: mosdns-updater
-    network_mode: host
-    restart: unless-stopped
-    volumes:
-      - ${MOSDNS_DATA_DIR:-.}:/etc/mosdns
-      - ${MOSDNS_DATA_DIR:-.}/updater:/app:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-    healthcheck:
-      test: ["CMD", "test", "-f", "/etc/mosdns/rules/direct-list.txt"]
-      interval: 3s
-      timeout: 2s
-      retries: 30
-      start_period: 15s
+      - .:/etc/mosdns
     environment:
-      SITE: ${SITE:-sz}
-      MOSDNS_CONFIG_DIR: "/etc/mosdns"
-      RULES_DIR: "/etc/mosdns/rules"
-      CUSTOM_SOURCE: "/app/custom.txt"
-      PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-1}
-      ROS_HOST: ${ROS_HOST:-10.100.50.254}
-      ROS_PORT: ${ROS_PORT:-8728}
-      ROS_USER: ${ROS_USER:-admin}
-      ROS_PASS: ${ROS_PASS:-}
-      ROS_LIST: ${ROS_LIST:-chatgpt-sgp}
-      ROS_COMMENT: ${ROS_COMMENT:-mosdns-chatgpt}
-      ROS_AI_LIST: ${ROS_AI_LIST:-ai-sgp}
-      ROS_AI_COMMENT: ${ROS_AI_COMMENT:-mosdns-ai}
-      TTL_SECONDS: ${TTL_SECONDS:-1800}
-      INTERVAL: ${INTERVAL:-120}
-      DNS_SERVER: ${DNS_SERVER:-1.1.1.1}
-      DNS_PORT: ${DNS_PORT:-53}
-      TLS_VERIFY: ${TLS_VERIFY:-1}
-      TLS_PORT: ${TLS_PORT:-443}
-      TLS_TIMEOUT: ${TLS_TIMEOUT:-2.5}
-      TLS_CACHE_TTL: ${TLS_CACHE_TTL:-1800}
-      TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
-      MOSDNS_LISTEN_PORT: ${MOSDNS_LISTEN_PORT:-53}
-      DOH_PORT: ${DOH_PORT:-8443}
-      DOH_CERT: ${DOH_CERT:-}
-      DOH_KEY: ${DOH_KEY:-}
-      HKCLOUD_DNS_IP: ${HKCLOUD_DNS_IP:-10.100.50.222}
-      SGPCLOUD_DNS_IP: ${SGPCLOUD_DNS_IP:-100.64.89.1}
       TZ: ${TZ:-Asia/Shanghai}
-      DAILY_UPDATE_TIME: ${DAILY_UPDATE_TIME:-05:00}
-    # entrypoint：merge_config → gen_custom_rules → crond(每日更新规则并重启mosdns) → updater
+      ROS_HOST: ${ROS_HOST:-}
+      ROS_PASS: ${ROS_PASS:-}
+      DNS_SERVER: ${DNS_SERVER:-10.100.89.3}

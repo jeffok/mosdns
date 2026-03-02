@@ -1,9 +1,15 @@
-# 运行时/启动时生成，勿提交
+# 运行时生成（容器 entrypoint 下载）
+rules/direct-list.txt
+rules/china_ip_list.txt
+rules/apple-cn.txt
+rules/proxy-list.txt
+rules/geosite-gfw.txt
+
+# 运行时状态
 config.yaml
-site.yaml
 cache.dump
 mosdns.log
-rules/
 
-# 环境变量与敏感信息，勿提交
+# 敏感信息
 .env
+certs/*.pem

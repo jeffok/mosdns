@@ -1,0 +1,35 @@
+# ai domains for forward_ai
+# AI 域名列表（仅用于分流到 forward_ai，控制走 SGP/新加坡）
+# 保持精简，避免把过大域（如全量 googleapis.com）拉去新加坡
+
+# ChatGPT / OpenAI
+# 核心域名（浏览器访问必需）
+chat.openai.com
+openai.com
+api.openai.com
+auth0.openai.com
+auth.openai.com
+chatgpt.com
+platform.openai.com
+# 静态资源域名（内容加载必需）
+oaiusercontent.com
+oaistatic.com
+cdn.oaistatic.com
+www.oaistatic.com
+# 手机 app 专用域名
+ios.chat.openai.com
+android.chat.openai.com
+# 开发者相关（可选，按需添加）
+developers.openai.com
+setup.auth.openai.com
+help.openai.com
+
+# Google AI / Gemini
+# 主域名（浏览器访问）
+gemini.google.com
+# API 端点
+generativelanguage.googleapis.com
+embeddedgeneration.googleapis.com
+# 开发者和 Studio
+ai.google.dev
+aistudio.google.com

@@ -1,16 +1,18 @@
-# 提交代码后自动构建 mosdns-updater 镜像并推送至 Docker Hub (jeffok/mosdns-updater)
-# 前置：在 GitHub 设置 Secret：DOCKERHUB_TOKEN（Docker Hub Access Token）
 name: Build and Push Docker Image
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'sync-ai.sh'
   release:
     types: [published]
 
 env:
   DOCKERHUB_USERNAME: jeffok
-  IMAGE_NAME: mosdns-updater
+  IMAGE_NAME: mosdns
 
 jobs:
   build:
@@ -42,8 +44,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: ./updater
-          file: ./updater/Dockerfile
+          context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.tags.outputs.tags }}

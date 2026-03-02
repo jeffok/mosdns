@@ -1,26 +1,14 @@
 # 统一自定义规则（仅注释与示例，实际条目请写在下方对应区段）
-# 由 gen_custom_rules.py 根据区段生成 custom-local.txt、custom-remote.txt、custom-hosts.txt
+# 由 gen_custom_rules.py 根据区段生成 custom-local.txt、custom-hosts.txt
 # 规则：空行和以 # 开头的行会被忽略；生成文件中只包含实际条目，不含本注释
 
 # ----------------------------------------
 # [local] 走国内 DNS 解析的域名
 # 每行一个域名，匹配到的域名将使用国内上游（如 119.29.29.29、223.5.5.5）解析
-# 示例：公司内网、国内直连服务
 # ----------------------------------------
 [local]
 # internal.company.com
 # corp.example.cn
-
-# ----------------------------------------
-# [remote] 走远程 DNS 解析的域名
-# 每行一个域名，匹配到的域名将使用远程上游（如 SGP）解析；
-# 同时 updater 会把这些域名解析出的 IP 写入 RouterOS address-list，供 SGP 出口使用
-# 默认不填则 custom-remote.txt 为空，仅在启动时根据此处生成
-# 示例：需走代理或指定出口的域名
-# ----------------------------------------
-[remote]
-# chat.openai.com
-# api.openai.com
 
 # ----------------------------------------
 # [hosts] 静态 IP 映射

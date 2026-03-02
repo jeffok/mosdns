@@ -1,0 +1,152 @@
+log:
+  level: error
+  file: /etc/mosdns/mosdns.log
+api:
+  http: 127.0.0.1:9091
+plugins:
+- tag: forward_cn
+  type: forward
+  args:
+    concurrent: 3
+    upstreams:
+    - addr: 119.29.29.29
+    - addr: 223.5.5.5
+    - addr: 114.114.114.114
+- tag: forward_global
+  type: forward
+  args:
+    concurrent: 1
+    upstreams:
+    - addr: 10.100.50.222:53
+- tag: forward_ai
+  type: forward
+  args:
+    concurrent: 1
+    upstreams:
+    - addr: 10.100.89.3:53
+- tag: ai_domains
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/ai-list.txt
+- tag: custom_hosts
+  type: hosts
+  args:
+    files:
+    - /etc/mosdns/rules/custom-hosts.txt
+- tag: custom_local_domains
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/custom-local.txt
+- tag: geosite_cn
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/direct-list.txt
+- tag: geoip_cn
+  type: ip_set
+  args:
+    files:
+    - /etc/mosdns/rules/china_ip_list.txt
+- tag: geosite_apple
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/apple-cn.txt
+- tag: geosite_no_cn
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/proxy-list.txt
+- tag: geosite_gfw
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/geosite-gfw.txt
+- tag: lazy_cache
+  type: cache
+  args:
+    size: 10240
+    lazy_cache_ttl: 600
+    dump_file: /etc/mosdns/cache.dump
+    dump_interval: 30
+- tag: has_resp_sequence
+  type: sequence
+  args:
+  - matches: has_resp
+    exec: accept
+- tag: query_custom_hosts
+  type: sequence
+  args:
+  - exec: $custom_hosts
+  - exec: jump has_resp_sequence
+- tag: query_custom_local
+  type: sequence
+  args:
+  - matches: qname $custom_local_domains
+    exec: $forward_cn
+- tag: query_ai
+  type: sequence
+  args:
+  - matches: qname $ai_domains
+    exec: $forward_ai
+- tag: cn_sequence
+  type: sequence
+  args:
+  - exec: $forward_cn
+  - exec: jump has_resp_sequence
+- tag: global_sequence
+  type: sequence
+  args:
+  - exec: prefer_ipv4
+  - exec: $forward_global
+  - exec: jump has_resp_sequence
+- tag: query_global_must_not_be_cn
+  type: sequence
+  args:
+  - exec: $global_sequence
+  - matches: resp_ip $geoip_cn
+    exec: drop_resp
+- tag: query_is_cn_domain
+  type: sequence
+  args:
+  - matches: qname $geosite_cn $geosite_apple
+    exec: $cn_sequence
+- tag: query_is_global_domain
+  type: sequence
+  args:
+  - matches: qname $geosite_no_cn $geosite_gfw
+    exec: $global_sequence
+- tag: fallback
+  type: fallback
+  args:
+    primary: query_global_must_not_be_cn
+    secondary: cn_sequence
+    threshold: 300
+    always_standby: true
+- tag: main_sequence
+  type: sequence
+  args:
+  - exec: $lazy_cache
+  - exec: $query_custom_local
+  - exec: jump has_resp_sequence
+  - exec: $query_ai
+  - exec: jump has_resp_sequence
+  - exec: $query_custom_hosts
+  - exec: jump has_resp_sequence
+  - exec: $query_is_global_domain
+  - exec: jump has_resp_sequence
+  - exec: $query_is_cn_domain
+  - exec: jump has_resp_sequence
+  - exec: $fallback
+- tag: udp_server
+  type: udp_server
+  args:
+    entry: main_sequence
+    listen: 0.0.0.0:53
+- tag: tcp_server
+  type: tcp_server
+  args:
+    entry: main_sequence
+    listen: 0.0.0.0:53

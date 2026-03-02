@@ -1,5 +1,6 @@
-# 通用分流逻辑（三分流 CN/Global/AI），与 site.yaml 由 merge_config.py 合并后生成 config.yaml
-# 不包含 forward_cn / forward_global / forward_ai / ai_domains（由 sites.yaml 中 SITE 对应节点提供）
+# 通用分流逻辑（三分流 CN/Global/AI）
+# 不包含 forward_cn / forward_global / forward_ai / ai_domains / doh_server
+# 以上由 sites.yaml 中 SITE 对应节点提供，merge_config.py 合并生成 config.yaml
 
 log:
   level: error
@@ -20,12 +21,6 @@ plugins:
     args:
       files:
         - "/etc/mosdns/rules/custom-local.txt"
-
-  - tag: custom_remote_domains
-    type: domain_set
-    args:
-      files:
-        - "/etc/mosdns/rules/custom-remote.txt"
 
   - tag: geosite_cn
     type: domain_set
@@ -83,12 +78,6 @@ plugins:
       - matches: qname $custom_local_domains
         exec: $forward_cn
 
-  - tag: query_custom_remote
-    type: sequence
-    args:
-      - matches: qname $custom_remote_domains
-        exec: $forward_global
-
   - tag: query_ai
     type: sequence
     args:
@@ -143,8 +132,6 @@ plugins:
       - exec: jump has_resp_sequence
       - exec: $query_ai
       - exec: jump has_resp_sequence
-      - exec: $query_custom_remote
-      - exec: jump has_resp_sequence
       - exec: $query_custom_hosts
       - exec: jump has_resp_sequence
       - exec: $query_is_global_domain
@@ -153,28 +140,14 @@ plugins:
       - exec: jump has_resp_sequence
       - exec: $fallback
 
-  # UDP/TCP DNS 服务器：默认监听 53 端口（标准 DNS 端口）
   - tag: udp_server
     type: udp_server
     args:
       entry: main_sequence
-      listen: "0.0.0.0:{{MOSDNS_LISTEN_PORT}}"
+      listen: "0.0.0.0:53"
 
   - tag: tcp_server
     type: tcp_server
     args:
       entry: main_sequence
-      listen: "0.0.0.0:{{MOSDNS_LISTEN_PORT}}"
-
-  # DoH：端口与证书路径由 merge_config 从环境变量替换（默认 8443，不占 443）
-  # 证书不存在时不启用 DoH（merge_config 会检查并移除此插件）
-  - tag: doh_server
-    type: http_server
-    args:
-      entries:
-        - path: /dns-query
-          exec: main_sequence
-      listen: "0.0.0.0:{{DOH_PORT}}"
-      cert: "{{DOH_CERT}}"
-      key: "{{DOH_KEY}}"
-      idle_timeout: 10
+      listen: "0.0.0.0:53"
