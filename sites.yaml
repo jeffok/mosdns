@@ -59,16 +59,6 @@ hk:
       args:
         files:
           - "/etc/mosdns/rules/ai-list.txt"
-    - tag: doh_server
-      type: http_server
-      args:
-        entries:
-          - path: /dns-query
-            exec: main_sequence
-        listen: "0.0.0.0:8443"
-        cert: "/etc/mosdns/certs/fullchain.pem"
-        key: "/etc/mosdns/certs/privkey.pem"
-        idle_timeout: 10
 
 dxb:
   plugins:

@@ -28,6 +28,7 @@ jobs:
         run: |
           for site in sz hk dxb; do
             python updater/merge_config.py --site "$site"
+            python updater/merge_config.py --site "$site" --doh
           done
 
       - name: Generate custom rules

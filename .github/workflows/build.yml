@@ -7,6 +7,8 @@ on:
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'sync-ai.sh'
+      - 'configs/'
+      - 'rules/'
   release:
     types: [published]
 

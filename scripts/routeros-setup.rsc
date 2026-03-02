@@ -2,11 +2,11 @@
 # MosDNS RouterOS Container 部署参考脚本（单容器架构）
 # =============================================================================
 # 执行前请替换：
-#   __LAN_IP__       -> RouterOS LAN IP，如 192.168.88.254（sz）、192.168.8.254（dxb）
-#   __TZ__           -> Asia/Shanghai（sz）或 Asia/Dubai（dxb）
-# 前提：
-#   1. 已执行 /system/device-mode/update container=yes 并重启
-#   2. 已将 configs/<site>.yaml 重命名为 config.yaml 和 rules/ 上传到 disk1/mosdns/
+#   __LAN_IP__       -> RouterOS LAN IP（如 192.168.8.254）
+#   __TZ__           -> Asia/Dubai（dxb）或 Asia/Shanghai（sz）
+#   __SITE__         -> dxb（或 sz），与 Compose 一致，由镜像内自动选用配置，无需上传 config
+#   __DOH_ENABLED__  -> 0 或 1；为 1 时需在 disk1/mosdns/certs/ 放 fullchain.pem、privkey.pem
+# 前提：已执行 /system/device-mode/update container=yes 并重启
 # =============================================================================
 
 # --- 步骤 1：Container 配置 ---
@@ -22,7 +22,9 @@
 # --- 步骤 3：创建挂载与环境变量 ---
 /container/mounts/add list=MOUNT_MOSDNS src=disk1/mosdns dst=/etc/mosdns
 
+/container/envs/add list=ENV_MOSDNS key=SITE value=__SITE__
 /container/envs/add list=ENV_MOSDNS key=TZ value=__TZ__
+/container/envs/add list=ENV_MOSDNS key=DOH_ENABLED value=__DOH_ENABLED__
 
 # --- 步骤 4：添加并启动 mosdns ---
 # 使用自定义镜像（entrypoint 循环：拉规则 → 启动 mosdns → 等待；crond 04:30 杀 mosdns 进程触发重载规则，不重启容器）

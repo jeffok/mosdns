@@ -13,3 +13,5 @@ mosdns.log
 # 敏感信息
 .env
 certs/*.pem
+
+.venv/

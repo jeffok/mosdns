@@ -15,11 +15,9 @@ plugins:
 - tag: forward_global
   type: forward
   args:
-    concurrent: 3
+    concurrent: 1
     upstreams:
-    - addr: 1.1.1.1
-    - addr: 8.8.8.8
-    - addr: 9.9.9.9
+    - addr: 10.100.50.222:53
 - tag: forward_ai
   type: forward
   args:
@@ -31,6 +29,16 @@ plugins:
   args:
     files:
     - /etc/mosdns/rules/ai-list.txt
+- tag: doh_server
+  type: http_server
+  args:
+    entries:
+    - path: /dns-query
+      exec: main_sequence
+    listen: 0.0.0.0:8443
+    cert: __DOH_CERT__
+    key: __DOH_KEY__
+    idle_timeout: 10
 - tag: custom_hosts
   type: hosts
   args:
