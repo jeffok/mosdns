@@ -9,6 +9,7 @@ on:
       - 'updater/custom.txt'
       - 'updater/ai-list.txt'
       - 'updater/merge_config.py'
+  workflow_dispatch:
       - 'updater/gen_custom_rules.py'
 
 permissions:
