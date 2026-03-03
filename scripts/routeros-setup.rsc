@@ -27,6 +27,8 @@
 /container/envs/add list=ENV_MOSDNS key=SITE value=__SITE__
 /container/envs/add list=ENV_MOSDNS key=TZ value=__TZ__
 /container/envs/add list=ENV_MOSDNS key=DOH_ENABLED value=__DOH_ENABLED__
+# ROS Container 不会自动注入 DNS，必须指定（Linux Docker 不需要）
+/container/envs/add list=ENV_MOSDNS key=CONTAINER_DNS value=8.8.8.8
 
 # --- 步骤 4：添加并启动 mosdns ---
 # 使用自定义镜像（entrypoint 循环：拉规则 → 启动 mosdns → 等待；crond 04:30 杀 mosdns 进程触发重载规则，不重启容器）
@@ -45,7 +47,15 @@
 }
 /system/scheduler/add name=mosdns-watchdog interval=5m on-event=mosdns-watchdog
 
+# --- 步骤 7：排除 DNS 劫持规则 ---
+# 若节点有 DSTNAT DNS 劫持规则（force lan dns），必须排除 mosdns 容器 IP，
+# 否则容器的上游 DNS 查询会被 redirect 回路由器形成死循环（SERVFAIL）。
+# 示例（将 __MOSDNS_IP__ 替换为 veth IP）：
+# /ip/firewall/nat/set [find comment~"force lan dns udp"] src-address=!__MOSDNS_IP__
+# /ip/firewall/nat/set [find comment~"force lan dns tcp"] src-address=!__MOSDNS_IP__
+
 # =============================================================================
 # 完成后：客户端 DNS 指向 __LAN_IP__
 # 验证：dig @__LAN_IP__ google.com
+# 若全部 SERVFAIL，检查 DNS 劫持规则是否已排除 mosdns IP（步骤 7）
 # =============================================================================

@@ -33,6 +33,11 @@
 /system script add name=mosdns-watchdog source={ /container start mosdns }
 /system scheduler add name=mosdns-watchdog interval=5m on-event=mosdns-watchdog
 
+# --- 6. 排除 DNS 劫持规则（关键！否则容器上游查询被 redirect 回路由器导致 SERVFAIL）---
+/ip firewall nat set [find comment="[hkcloud] force lan dns udp"] src-address=!10.100.50.252
+/ip firewall nat set [find comment="[hkcloud] force lan dns tcp"] src-address=!10.100.50.252
+
 # =============================================================================
 # 验证：dig @10.100.50.252 baidu.com；DoH https://10.100.50.252:8443/dns-query
+# 若 SERVFAIL，检查：1) DNS 劫持规则是否排除了 .252  2) conntrack 是否有残留（清除后重启容器）
 # =============================================================================

@@ -17,7 +17,7 @@ sz:
       args:
         concurrent: 1
         upstreams:
-          - addr: 10.100.50.222:53
+          - addr: 10.100.50.252:53
     - tag: forward_ai
       type: forward
       args:
@@ -67,7 +67,7 @@ dxb:
       args:
         concurrent: 1
         upstreams:
-          - addr: 10.100.50.222:53
+          - addr: 10.100.50.252:53
     - tag: forward_global
       type: forward
       args:
