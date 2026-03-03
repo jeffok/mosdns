@@ -57,7 +57,10 @@ if [ -f "$TEMPLATE" ]; then
   rm -f /tmp/config.tmp
 
   case "$DOH_ENABLED" in 1|true|yes)
-    cat >> /etc/mosdns/config.yaml <<DOEOF
+    _cert="${DOH_CERT:-/etc/mosdns/certs/fullchain.pem}"
+    _key="${DOH_KEY:-/etc/mosdns/certs/privkey.pem}"
+    if [ -f "$_cert" ] && [ -f "$_key" ]; then
+      cat >> /etc/mosdns/config.yaml <<DOEOF
 - tag: doh_server
   type: http_server
   args:
@@ -65,11 +68,14 @@ if [ -f "$TEMPLATE" ]; then
     - path: /dns-query
       exec: main_sequence
     listen: 0.0.0.0:8443
-    cert: ${DOH_CERT:-/etc/mosdns/certs/fullchain.pem}
-    key: ${DOH_KEY:-/etc/mosdns/certs/privkey.pem}
+    cert: $_cert
+    key: $_key
     idle_timeout: 10
 DOEOF
-    log "DoH enabled on :8443"
+      log "DoH enabled on :8443"
+    else
+      log "WARN DOH_ENABLED=1 but cert/key missing ($_cert, $_key), DoH skipped"
+    fi
   ;; esac
 
   log "config.yaml generated: CN=$(count_dns "$DNS_CN") GLOBAL=$(count_dns "$DNS_GLOBAL") AI=$(count_dns "$DNS_AI")"
