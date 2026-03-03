@@ -11,6 +11,9 @@ on:
       - 'updater/merge_config.py'
       - 'updater/gen_custom_rules.py'
 
+permissions:
+  contents: write
+
 jobs:
   generate:
     runs-on: ubuntu-latest
