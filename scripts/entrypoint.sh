@@ -5,7 +5,16 @@ mkdir -p "$RULES"
 
 log() { echo "[entrypoint] $*"; }
 
-# ROS 容器不会自动注入 DNS，通过 CONTAINER_DNS 写入 resolv.conf
+# 规则下载源（名称|URL）
+RULE_SOURCES="
+direct-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt
+china_ip_list.txt|https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt
+apple-cn.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt
+proxy-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt
+geosite-gfw.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt
+"
+
+# ROS 容器不会自动注入 DNS
 if [ -n "$CONTAINER_DNS" ]; then
   echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
   log "resolv.conf <- $CONTAINER_DNS"
@@ -71,35 +80,36 @@ if [ -d /opt/mosdns-rules ]; then
   for f in /opt/mosdns-rules/*; do [ -f "$f" ] && cp "$f" "$RULES/"; done
 fi
 
-# ROS 容器 veth 启动后需 ~3 分钟建立出站连通性
+# ROS 容器 veth 启动后需要等一会儿才能连外网
 wait_for_network() {
   max_wait=180; elapsed=0
   while [ $elapsed -lt $max_wait ]; do
-    if nslookup raw.githubusercontent.com >/dev/null 2>&1; then
-      log "network ready (${elapsed}s)"
-      return 0
-    fi
+    nslookup raw.githubusercontent.com >/dev/null 2>&1 && { log "network ready (${elapsed}s)"; return 0; }
     sleep 5; elapsed=$((elapsed + 5))
   done
-  log "WARN network not ready after ${max_wait}s, proceeding with fallback"
+  log "WARN network not ready after ${max_wait}s"
   return 1
 }
 
-REQUIRED_RULES="direct-list.txt china_ip_list.txt apple-cn.txt proxy-list.txt geosite-gfw.txt"
 ensure_rule_files() {
-  for f in $REQUIRED_RULES; do
-    [ -f "$RULES/$f" ] || { touch "$RULES/$f"; log "created empty fallback $f"; }
+  echo "$RULE_SOURCES" | while IFS='|' read -r name url; do
+    name=$(echo "$name" | xargs)
+    [ -z "$name" ] && continue
+    [ -f "$RULES/$name" ] || { touch "$RULES/$name"; log "created empty fallback $name"; }
   done
 }
 
-dl() {
-  name="$1"; url="$2"
-  tmp="$RULES/${name}.tmp"; dst="$RULES/$name"
-  if wget -q -O "$tmp" "$url" && [ -s "$tmp" ]; then
-    mv "$tmp" "$dst"; log "ok $name"
-  else
-    rm -f "$tmp"; log "WARN $name download failed, keep old file"
-  fi
+dl_rules() {
+  echo "$RULE_SOURCES" | while IFS='|' read -r name url; do
+    name=$(echo "$name" | xargs); url=$(echo "$url" | xargs)
+    [ -z "$name" ] && continue
+    tmp="$RULES/${name}.tmp"
+    if wget -q -O "$tmp" "$url" && [ -s "$tmp" ]; then
+      mv "$tmp" "$RULES/$name"; log "ok $name"
+    else
+      rm -f "$tmp"; log "WARN $name download failed"
+    fi
+  done
 }
 
 # ---- crontab: 04:30 杀 mosdns 触发规则重载；每 2 分钟 sync-ai ----
@@ -124,15 +134,11 @@ while true; do
     FIRST_RUN=0
   fi
 
-  dl direct-list.txt   "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt"
-  dl china_ip_list.txt "https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt"
-  dl apple-cn.txt      "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt"
-  dl proxy-list.txt    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"
-  dl geosite-gfw.txt   "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt"
+  dl_rules
 
   log "starting mosdns"
   mosdns start -c /etc/mosdns/config.yaml &
   echo $! > "$PIDFILE"
   wait "$(cat "$PIDFILE")"
-  log "mosdns exited, reloading rules and restarting"
+  log "mosdns exited, reloading"
 done

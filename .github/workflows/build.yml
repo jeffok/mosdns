@@ -5,9 +5,7 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
-      - 'entrypoint.sh'
-      - 'sync-ai.sh'
-      - 'config.template.yaml'
+      - 'scripts/**'
       - 'rules/**'
   release:
     types: [published]

@@ -1,125 +1,133 @@
 # MosDNS 智能分流 DNS
 
-基于 [MosDNS](https://github.com/IrineSistiana/mosdns) 的 CN / Global / AI 三分流，与 RouterOS `ai-sgp` address-list 联动做策略路由。通用镜像 [jeffok/mosdns](https://hub.docker.com/r/jeffok/mosdns)，通过环境变量适配任意站点。
+基于 [mosdns](https://github.com/IrineSistiana/mosdns) 的国内/国际/AI 三路分流 DNS 服务。
+镜像地址：[jeffok/mosdns](https://hub.docker.com/r/jeffok/mosdns)
 
-## 快速开始
+所有站点共用同一个镜像，不同站点的差异通过 `.env` 环境变量配置。
 
-所有站点使用同一个镜像，差异全部通过 `.env` 环境变量控制。
+## Docker Compose 部署
 
-### Docker Compose（Linux 主机）
+适用于 Linux 主机或 NAS。
 
 ```bash
 mkdir -p mosdns/certs && cd mosdns
 
-# 1. 复制 docker-compose.yml（或从仓库获取）
-# 2. 复制 .env.example 为 .env，按站点修改
+# 放入 docker-compose.yml 和 .env.example，然后：
 cp .env.example .env
-vi .env
+vi .env                # 按需修改 DNS 上游等参数
 
-# 3. 启动
 docker compose pull && docker compose up -d
 
-# 4. 验证
-dig @<本机IP> baidu.com
-dig @<本机IP> google.com
+# 测试
+dig @127.0.0.1 baidu.com    # 应走国内 DNS
+dig @127.0.0.1 google.com   # 应走国际 DNS
 ```
 
-### RouterOS Container
+如果需要 DoH，在 `certs/` 目录放入证书文件，并在 `.env` 中设置 `DOH_ENABLED=1`。
+
+## RouterOS Container 部署
+
+适用于 MikroTik RouterOS 7.x 设备。
+
+**1. 开启容器功能（只需一次，执行后重启路由器）：**
 
 ```routeros
-# 前提
-/system/device-mode/update container=yes   # 重启生效
+/system/device-mode/update container=yes
 /certificate/settings/set builtin-trust-anchors=trusted
+/container/config/set registry-url=https://registry-1.docker.io tmpdir=disk1/tmp
+```
 
-# 设置环境变量（按站点修改值）
-/container envs add list=ENV_MOSDNS key=DNS_CN value=119.29.29.29,223.5.5.5,114.114.114.114
-/container envs add list=ENV_MOSDNS key=DNS_GLOBAL value=1.1.1.1,8.8.8.8,9.9.9.9
+**2. 创建虚拟网卡并加入网桥：**
+
+```routeros
+/interface/veth/add name=veth-mosdns address=192.168.8.252/24 gateway=192.168.8.254
+/interface/bridge/port add bridge=br-lan interface=veth-mosdns
+```
+
+> 把 IP 和网桥名改成你自己的。
+
+**3. 设置环境变量：**
+
+```routeros
+/container envs add list=ENV_MOSDNS key=DNS_CN value=119.29.29.29,223.5.5.5
+/container envs add list=ENV_MOSDNS key=DNS_GLOBAL value=1.1.1.1,8.8.8.8
 /container envs add list=ENV_MOSDNS key=TZ value=Asia/Shanghai
 /container envs add list=ENV_MOSDNS key=CONTAINER_DNS value=8.8.8.8
+```
 
-# 拉取并启动
+> `CONTAINER_DNS` 是 RouterOS 容器必须设的，不然容器内部无法解析域名。
+> 其他可选变量见下方环境变量表。
+
+**4. 创建并启动容器：**
+
+```routeros
 /container add remote-image=jeffok/mosdns:latest interface=veth-mosdns \
   root-dir=disk1/images/mosdns envlist=ENV_MOSDNS name=mosdns \
   start-on-boot=yes logging=yes
 /container start mosdns
 ```
 
-详见 `scripts/routeros-setup.rsc`（通用）和 `scripts/hkcloud-mosdns-container.rsc`（hkcloud DoH 专用）。
+**5. 把路由器 DNS 指向 mosdns：**
+
+```routeros
+/ip dns set servers=192.168.8.252
+```
+
+**6.（可选）自动拉起 — 容器崩溃时自动重启：**
+
+```routeros
+/system script add name=mosdns-watchdog source={ /container start mosdns }
+/system scheduler add name=mosdns-watchdog interval=5m on-event=mosdns-watchdog
+```
+
+**7.（重要）如果路由器有 DNS 劫持规则，必须排除 mosdns IP：**
+
+如果你配置了 `dstnat redirect dst-port=53` 这类规则把所有 DNS 流量劫持到路由器自身，
+那 mosdns 的上游查询也会被劫持回来，形成死循环，导致所有查询返回 SERVFAIL。
+
+解决方法：在劫持规则里把 mosdns 的 IP 排除掉。
+
+```routeros
+/ip/firewall/nat/set [find comment~"force lan dns"] src-address=!192.168.8.252
+```
 
 ## 环境变量
 
-复制 `.env.example` 为 `.env`，按站点需求修改。
+复制 `.env.example` 为 `.env`，按需修改。
 
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| DNS_CN | 119.29.29.29,223.5.5.5,114.114.114.114 | CN 上游 DNS（逗号分隔，支持 IP:PORT） |
-| DNS_GLOBAL | 1.1.1.1,8.8.8.8,9.9.9.9 | 国际上游 DNS |
-| DNS_AI | （复用 DNS_GLOBAL） | AI 上游 DNS |
-| DOH_ENABLED | 0 | `1`=开启 DoH（需在 `./certs/` 放证书） |
-| DOH_CERT / DOH_KEY | /etc/mosdns/certs/ 下 fullchain/privkey | DoH 证书容器内路径 |
-| TZ | Asia/Shanghai | 时区，影响 crond 04:30 规则重载 |
-| ROS_HOST | 空 | RouterOS SSH（`host:port`），空则不同步 ai-sgp |
-| ROS_PASS | 空 | RouterOS admin 密码 |
-| DNS_SERVER | （取 DNS_GLOBAL 第一个） | sync-ai 解析用 DNS |
-| RELOAD_DELAY | 0 | 04:30 重载前延迟秒数，多站点错开用 |
-| CONTAINER_DNS | 空 | **仅 ROS Container**：写入 /etc/resolv.conf |
 
-## 各站点 .env 示例
+| 变量            | 默认值                                    | 说明                                                  |
+| ------------- | -------------------------------------- | --------------------------------------------------- |
+| DNS_CN        | 119.29.29.29,223.5.5.5,114.114.114.114 | 国内域名用的上游 DNS，逗号分隔                                   |
+| DNS_GLOBAL    | 1.1.1.1,8.8.8.8,9.9.9.9                | 国际域名用的上游 DNS                                        |
+| DNS_AI        | 同 DNS_GLOBAL                           | AI 域名用的上游 DNS（如需走特定出口）                              |
+| TZ            | Asia/Shanghai                          | 时区                                                  |
+| DOH_ENABLED   | 0                                      | 设为 1 开启 DoH，需要在 certs/ 放证书                          |
+| DOH_CERT      | /etc/mosdns/certs/fullchain.pem        | DoH 证书路径（容器内）                                       |
+| DOH_KEY       | /etc/mosdns/certs/privkey.pem          | DoH 私钥路径（容器内）                                       |
+| ROS_HOST      | 空                                      | RouterOS SSH 地址（如 192.168.8.254:6220），用于同步 AI IP 列表 |
+| ROS_USER      | admin                                   | RouterOS 用户名                                        |
+| ROS_PASS      | 空                                      | RouterOS 密码                                         |
+| CONTAINER_DNS | 空                                      | **仅 RouterOS 容器需要**，设为 8.8.8.8                      |
+| RELOAD_DELAY  | 0                                      | 每日规则更新前的延迟秒数，多站点可以错开                                |
 
-**szhome**（Docker Compose，192.168.88.252）：
-```
-DNS_CN=119.29.29.29,223.5.5.5,114.114.114.114
-DNS_GLOBAL=10.100.50.252
-TZ=Asia/Shanghai
-ROS_HOST=192.168.88.254:6220
-ROS_PASS=你的密码
-RELOAD_DELAY=40
-```
 
-**hkcloud**（ROS 容器，10.100.50.252，启用 DoH）：
-```
-DNS_CN=119.29.29.29,223.5.5.5,114.114.114.114
-DNS_GLOBAL=1.1.1.1,8.8.8.8,9.9.9.9
-DNS_AI=10.100.89.3
-DOH_ENABLED=1
-DOH_CERT=/etc/mosdns/certs/jeffok.com.crt
-DOH_KEY=/etc/mosdns/certs/jeffok.com.key
-TZ=Asia/Hong_Kong
-CONTAINER_DNS=8.8.8.8
-ROS_HOST=10.100.50.254:6220
-ROS_PASS=你的密码
-RELOAD_DELAY=20
-```
+## 日常维护
 
-**dxbhome**（ROS 容器，192.168.8.252）：
-```
-DNS_CN=10.100.50.252
-DNS_GLOBAL=1.1.1.1,8.8.8.8,9.9.9.9
-TZ=Asia/Dubai
-CONTAINER_DNS=8.8.8.8
-ROS_HOST=192.168.8.254:6220
-ROS_PASS=你的密码
-RELOAD_DELAY=60
-```
+- **规则自动更新**：容器每天凌晨 04:30 自动拉取最新规则并重载，不需要手动操作
+- **AI 列表同步**：每 2 分钟把 AI 域名解析的 IP 同步到 RouterOS 的 address-list，用于策略路由
+- **更新镜像**：Docker Compose 执行 `docker compose pull && docker compose up -d`；RouterOS 需要先停止删除旧容器，再重新创建
 
-## 维护说明
+## 常见问题
 
-- **规则更新**：容器内 crond 每日 04:30 杀 mosdns 进程，entrypoint 自动重新拉规则并启动，不重启容器
-- **AI 同步**：每 2 分钟 SSH 将 `ai-list.txt` 解析出的 IP 写入 RouterOS `ai-sgp`
-- **更新镜像**：Compose 执行 `docker compose pull && docker compose up -d`；RouterOS 需 `stop` → `remove` → `add` 重建容器
+**拉取镜像失败，报 SSL 证书错误**
+→ 执行 `/certificate/settings/set builtin-trust-anchors=trusted`
 
-## 故障排查（RouterOS Container）
+**容器启动了但所有查询都返回 SERVFAIL**
+→ 大概率是 DNS 劫持规则没有排除 mosdns IP，见上方第 7 步
 
-**镜像拉取报 SSL 证书不受信任**：执行 `/certificate/settings/set builtin-trust-anchors=trusted`
+**容器内下载规则文件失败**
+→ RouterOS 容器启动后网络需要约 1-3 分钟才能通，entrypoint 会自动等待。镜像里也预下载了规则，首次启动不影响使用
 
-**容器内 wget/nslookup 报 bad address**：添加环境变量 `CONTAINER_DNS=8.8.8.8`
-
-**启动后所有查询 SERVFAIL**：检查是否存在 DNS 劫持规则（`dstnat action=redirect dst-port=53`），mosdns 容器 IP 必须在排除列表中。修改 `src-address=!<mosdns_IP>` 后清除 conntrack 并重启容器
-
-**规则下载全部失败（首次启动）**：ROS Container veth 启动后需 ~3 分钟建立出站连通性，entrypoint 已内置等待探测（最多 180 秒），且镜像预下载了规则文件
-
-**mounts/mountlists 参数报错**：mounts 使用 `name=`（非 `list=`）；部分固件 `mountlists` 不可用，改为将文件放入 `root-dir` 对应路径
-
-## 许可证
-
-见 [LICENSE](LICENSE)。
+**mounts 参数报错**
+→ RouterOS 7.20 的 mounts 用 `name=` 不是 `list=`；如果 `mountlists` 参数不支持，直接把文件放到容器的 `root-dir` 对应路径下

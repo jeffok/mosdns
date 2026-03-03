@@ -5,9 +5,5 @@ services:
     network_mode: host
     restart: unless-stopped
     volumes:
-      - mosdns-data:/etc/mosdns
       - ./certs:/etc/mosdns/certs:ro
     env_file: .env
-
-volumes:
-  mosdns-data:
