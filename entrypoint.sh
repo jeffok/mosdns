@@ -3,35 +3,75 @@ RULES=/etc/mosdns/rules
 PIDFILE=/tmp/mosdns.pid
 mkdir -p "$RULES"
 
-log() {
-  echo "[entrypoint] $*"
-}
+log() { echo "[entrypoint] $*"; }
 
-# 若宿主机未注入 DNS（如 ROS 容器内 wget 无法解析），通过 CONTAINER_DNS 写入 resolv.conf
+# ROS 容器不会自动注入 DNS，通过 CONTAINER_DNS 写入 resolv.conf
 if [ -n "$CONTAINER_DNS" ]; then
   echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
   log "resolv.conf <- $CONTAINER_DNS"
 fi
 
-# 根据 SITE、DOH_ENABLED 选用配置；DoH 开启（1/true/yes）时用 <site>-doh.yaml 并替换证书路径
-SITE=${SITE:-sz}
-case "$SITE" in hk|sz|dxb) ;; *) SITE=sz;; esac
-case "$DOH_ENABLED" in 1|true|yes) CONFIG_FILE="${SITE}-doh.yaml" ;; *) CONFIG_FILE="${SITE}.yaml" ;; esac
-if [ -f "/opt/mosdns-configs/${CONFIG_FILE}" ]; then
-  cp "/opt/mosdns-configs/${CONFIG_FILE}" /etc/mosdns/config.yaml
-  case "$CONFIG_FILE" in
-    *-doh.yaml)
-      sed -i "s|__DOH_CERT__|${DOH_CERT:-/etc/mosdns/certs/fullchain.pem}|g; s|__DOH_KEY__|${DOH_KEY:-/etc/mosdns/certs/privkey.pem}|g" /etc/mosdns/config.yaml
-    ;;
-  esac
-  log "SITE=$SITE DOH=$DOH_ENABLED -> config.yaml"
+# ---- 从环境变量生成 config.yaml ----
+DNS_CN="${DNS_CN:-119.29.29.29,223.5.5.5,114.114.114.114}"
+DNS_GLOBAL="${DNS_GLOBAL:-1.1.1.1,8.8.8.8,9.9.9.9}"
+DNS_AI="${DNS_AI:-$DNS_GLOBAL}"
+
+dns_to_yaml() {
+  echo "$1" | tr ',' '\n' | while read -r addr; do
+    addr=$(echo "$addr" | xargs)
+    [ -n "$addr" ] && printf "    - addr: %s\n" "$addr"
+  done
+}
+
+count_dns() {
+  n=$(echo "$1" | tr ',' '\n' | grep -c .)
+  [ "$n" -lt 1 ] && n=1
+  echo "$n"
+}
+
+TEMPLATE=/opt/mosdns/config.template.yaml
+if [ -f "$TEMPLATE" ]; then
+  sed -e "s|__CONCURRENT_CN__|$(count_dns "$DNS_CN")|" \
+      -e "s|__CONCURRENT_GLOBAL__|$(count_dns "$DNS_GLOBAL")|" \
+      -e "s|__CONCURRENT_AI__|$(count_dns "$DNS_AI")|" \
+      "$TEMPLATE" > /tmp/config.tmp
+
+  CN_YAML=$(dns_to_yaml "$DNS_CN")
+  GL_YAML=$(dns_to_yaml "$DNS_GLOBAL")
+  AI_YAML=$(dns_to_yaml "$DNS_AI")
+
+  awk -v cn="$CN_YAML" -v gl="$GL_YAML" -v ai="$AI_YAML" \
+    '/__UPSTREAMS_CN__/{print cn;next}
+     /__UPSTREAMS_GLOBAL__/{print gl;next}
+     /__UPSTREAMS_AI__/{print ai;next}
+     {print}' /tmp/config.tmp > /etc/mosdns/config.yaml
+  rm -f /tmp/config.tmp
+
+  case "$DOH_ENABLED" in 1|true|yes)
+    cat >> /etc/mosdns/config.yaml <<DOEOF
+- tag: doh_server
+  type: http_server
+  args:
+    entries:
+    - path: /dns-query
+      exec: main_sequence
+    listen: 0.0.0.0:8443
+    cert: ${DOH_CERT:-/etc/mosdns/certs/fullchain.pem}
+    key: ${DOH_KEY:-/etc/mosdns/certs/privkey.pem}
+    idle_timeout: 10
+DOEOF
+    log "DoH enabled on :8443"
+  ;; esac
+
+  log "config.yaml generated: CN=$(count_dns "$DNS_CN") GLOBAL=$(count_dns "$DNS_GLOBAL") AI=$(count_dns "$DNS_AI")"
 fi
 
+# ---- 复制镜像内置规则文件 ----
 if [ -d /opt/mosdns-rules ]; then
   for f in /opt/mosdns-rules/*; do [ -f "$f" ] && cp "$f" "$RULES/"; done
 fi
 
-# RouterOS 容器 veth 网络需要 ~3 分钟建立出站连通性，等待 DNS 可用再下载
+# ROS 容器 veth 启动后需 ~3 分钟建立出站连通性
 wait_for_network() {
   max_wait=180; elapsed=0
   while [ $elapsed -lt $max_wait ]; do
@@ -45,7 +85,6 @@ wait_for_network() {
   return 1
 }
 
-# 确保 mosdns 必需的规则文件存在（空文件也可被加载，仅无分流效果）
 REQUIRED_RULES="direct-list.txt china_ip_list.txt apple-cn.txt proxy-list.txt geosite-gfw.txt"
 ensure_rule_files() {
   for f in $REQUIRED_RULES; do
@@ -54,29 +93,17 @@ ensure_rule_files() {
 }
 
 dl() {
-  name="$1"
-  url="$2"
-  tmp="$RULES/${name}.tmp"
-  dst="$RULES/$name"
-
+  name="$1"; url="$2"
+  tmp="$RULES/${name}.tmp"; dst="$RULES/$name"
   if wget -q -O "$tmp" "$url" && [ -s "$tmp" ]; then
-    mv "$tmp" "$dst"
-    log "ok $name"
+    mv "$tmp" "$dst"; log "ok $name"
   else
-    rm -f "$tmp"
-    log "WARN $name download failed, keep old file"
+    rm -f "$tmp"; log "WARN $name download failed, keep old file"
   fi
 }
 
-# --- 1. 设置 crontab：04:30 杀 mosdns 进程（由下方循环重新拉规则并启动）；每 2 分钟 sync-ai ---
-# 04:30 加站点固定延迟，减少多站点同时更新带来的上游抖动（保持 /bin/sh 兼容）
-case "$SITE" in
-  hk) RELOAD_DELAY=20 ;;
-  sz) RELOAD_DELAY=40 ;;
-  dxb) RELOAD_DELAY=60 ;;
-  *) RELOAD_DELAY=0 ;;
-esac
-
+# ---- crontab: 04:30 杀 mosdns 触发规则重载；每 2 分钟 sync-ai ----
+RELOAD_DELAY="${RELOAD_DELAY:-0}"
 touch /etc/mosdns/cache.dump
 {
   printf "30 4 * * * sleep %s; kill \$(cat %s 2>/dev/null) 2>/dev/null\n" "$RELOAD_DELAY" "$PIDFILE"
@@ -85,10 +112,10 @@ touch /etc/mosdns/cache.dump
 crond -b -l 2
 log "crond started $(cat /etc/timezone 2>/dev/null || echo UTC)"
 
-# --- 2. 启动时执行一次 AI 同步 ---
+# ---- 启动时执行一次 AI 同步 ----
 /sync-ai.sh
 
-# --- 3. 循环：拉规则 → 启动 mosdns → 等待；mosdns 退出后（被 crond kill 或崩溃）再次拉规则并启动 ---
+# ---- 循环：拉规则 -> 启动 mosdns -> 等待 ----
 FIRST_RUN=1
 while true; do
   if [ "$FIRST_RUN" = 1 ]; then

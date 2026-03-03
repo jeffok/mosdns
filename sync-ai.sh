@@ -4,7 +4,8 @@ AI_LIST="$RULES/ai-list.txt"
 LIST="ai-sgp"
 COMMENT="mosdns-ai"
 TTL="1800s"
-DNS="${DNS_SERVER:-10.100.89.3}"
+_GL_FIRST=$(echo "${DNS_GLOBAL:-}" | cut -d',' -f1 | xargs)
+DNS="${DNS_SERVER:-${_GL_FIRST:-10.100.89.3}}"
 
 [ -z "$ROS_HOST" ] || [ -z "$ROS_PASS" ] || [ ! -f "$AI_LIST" ] && exit 0
 

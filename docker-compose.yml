@@ -1,4 +1,3 @@
-# SITE（hk/sz/dxb）、DOH_ENABLED、ROS 变量；certs 始终挂载，开 DoH 时放证书到 ./certs/
 services:
   mosdns:
     image: jeffok/mosdns:latest
@@ -8,15 +7,7 @@ services:
     volumes:
       - mosdns-data:/etc/mosdns
       - ./certs:/etc/mosdns/certs:ro
-    environment:
-      SITE: ${SITE:-sz}
-      DOH_ENABLED: ${DOH_ENABLED:-0}
-      DOH_CERT: ${DOH_CERT:-/etc/mosdns/certs/fullchain.pem}
-      DOH_KEY: ${DOH_KEY:-/etc/mosdns/certs/privkey.pem}
-      TZ: ${TZ:-Asia/Shanghai}
-      ROS_HOST: ${ROS_HOST:-}
-      ROS_PASS: ${ROS_PASS:-}
-      DNS_SERVER: ${DNS_SERVER:-10.100.89.3}
+    env_file: .env
 
 volumes:
   mosdns-data:
