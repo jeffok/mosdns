@@ -1,4 +1,4 @@
-# 运行时生成（entrypoint 循环内 wget 下载）
+# 运行时下载的规则文件（Dockerfile 预下载，entrypoint 每日更新）
 rules/direct-list.txt
 rules/china_ip_list.txt
 rules/apple-cn.txt
@@ -12,6 +12,8 @@ mosdns.log
 
 # 敏感信息
 .env
-certs/*.pem
+certs/
 
+# 开发环境
 .venv/
+__pycache__/

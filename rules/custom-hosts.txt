@@ -1,1 +1,3 @@
-# generated from custom.txt [hosts]
+# 静态 IP 映射（格式：IP 域名）
+# 1.2.3.4 example.com
+# 10.0.0.1 internal.local
