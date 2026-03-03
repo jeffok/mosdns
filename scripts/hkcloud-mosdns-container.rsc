@@ -2,7 +2,7 @@
 # hkcloud mosdns RouterOS 容器部署（DoH，veth 10.100.50.252 已就绪）
 # =============================================================================
 # 前提：veth-mosdns（10.100.50.252）已创建并加入 LAN 桥
-# 证书：从 10.100.50.222:/usr/local/openresty/nginx/conf/ssl 取 jeffok.com.crt、jeffok.com.key
+# 证书：从 10.100.50.222 取 jeffok.com.crt、jeffok.com.key
 #       在 222 上起临时 HTTP：cd /usr/local/openresty/nginx/conf/ssl && python3 -m http.server 18888
 #       路由器上：/tool fetch url=http://10.100.50.222:18888/jeffok.com.crt dst-path=docker/mosdns/certs/jeffok.com.crt
 #               /tool fetch url=http://10.100.50.222:18888/jeffok.com.key dst-path=docker/mosdns/certs/jeffok.com.key
@@ -17,14 +17,19 @@
 /container/mounts/add name=MC src=docker/mosdns/certs dst=/etc/mosdns/certs
 
 # --- 3. 环境变量 ---
-/container envs add list=ENV_MOSDNS key=SITE value=hk
+/container envs add list=ENV_MOSDNS key=DNS_CN value=119.29.29.29,223.5.5.5,114.114.114.114
+/container envs add list=ENV_MOSDNS key=DNS_GLOBAL value=1.1.1.1,8.8.8.8,9.9.9.9
+/container envs add list=ENV_MOSDNS key=DNS_AI value=10.100.89.3
 /container envs add list=ENV_MOSDNS key=TZ value=Asia/Hong_Kong
 /container envs add list=ENV_MOSDNS key=DOH_ENABLED value=1
 /container envs add list=ENV_MOSDNS key=DOH_CERT value=/etc/mosdns/certs/jeffok.com.crt
 /container envs add list=ENV_MOSDNS key=DOH_KEY value=/etc/mosdns/certs/jeffok.com.key
 /container envs add list=ENV_MOSDNS key=CONTAINER_DNS value=8.8.8.8
+/container envs add list=ENV_MOSDNS key=RELOAD_DELAY value=20
+/container envs add list=ENV_MOSDNS key=ROS_HOST value=10.100.50.254:6220
+/container envs add list=ENV_MOSDNS key=ROS_PASS value=Wangke.0912
 
-# --- 4. 添加并启动（若 add 报错可去掉 mountlists=MC，改将证书 fetch 到 root-dir/etc/mosdns/certs/）---
+# --- 4. 添加并启动 ---
 /container add remote-image=jeffok/mosdns:latest interface=veth-mosdns root-dir=docker/images/mosdns envlist=ENV_MOSDNS name=mosdns start-on-boot=yes logging=yes
 /container start mosdns
 
