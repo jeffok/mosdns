@@ -1,0 +1,24 @@
+# 10.100.50.222 /data/mosdns 单容器部署（jeffok/mosdns:latest，SITE=hk + DoH）
+# 使用：cp 到 /data/mosdns/docker-compose.yml，同目录下 .env 设 SITE=hk DOH_ENABLED=1
+# certs 目录放 jeffok.com.crt / jeffok.com.key（或软链到 openresty/nginx/conf/ssl）
+services:
+  mosdns:
+    image: jeffok/mosdns:latest
+    container_name: mosdns
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - mosdns-data:/etc/mosdns
+      - ./certs:/etc/mosdns/certs:ro
+    environment:
+      SITE: ${SITE:-hk}
+      DOH_ENABLED: ${DOH_ENABLED:-1}
+      DOH_CERT: ${DOH_CERT:-/etc/mosdns/certs/jeffok.com.crt}
+      DOH_KEY: ${DOH_KEY:-/etc/mosdns/certs/jeffok.com.key}
+      TZ: ${TZ:-Asia/Hong_Kong}
+      ROS_HOST: ${ROS_HOST:-}
+      ROS_PASS: ${ROS_PASS:-}
+      DNS_SERVER: ${DNS_SERVER:-10.100.89.3}
+
+volumes:
+  mosdns-data:

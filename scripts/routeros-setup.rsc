@@ -7,6 +7,8 @@
 #   __SITE__         -> dxb（或 sz），与 Compose 一致，由镜像内自动选用配置，无需上传 config
 #   __DOH_ENABLED__  -> 0 或 1；为 1 时需在 disk1/mosdns/certs/ 放 fullchain.pem、privkey.pem
 # 前提：已执行 /system/device-mode/update container=yes 并重启
+# 若拉取镜像报 SSL: no trusted CA certificate found，先执行（ROS 常见问题）：
+#   /certificate/settings/set builtin-trust-anchors=trusted
 # =============================================================================
 
 # --- 步骤 1：Container 配置 ---

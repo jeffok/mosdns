@@ -31,8 +31,27 @@ if [ -d /opt/mosdns-rules ]; then
   for f in /opt/mosdns-rules/*; do [ -f "$f" ] && cp "$f" "$RULES/"; done
 fi
 
-# 原子更新：下载到临时文件，校验非空后再替换正式文件
-# 不安装新工具，保持镜像体积不变
+# RouterOS 容器 veth 网络需要 ~3 分钟建立出站连通性，等待 DNS 可用再下载
+wait_for_network() {
+  max_wait=180; elapsed=0
+  while [ $elapsed -lt $max_wait ]; do
+    if nslookup raw.githubusercontent.com >/dev/null 2>&1; then
+      log "network ready (${elapsed}s)"
+      return 0
+    fi
+    sleep 5; elapsed=$((elapsed + 5))
+  done
+  log "WARN network not ready after ${max_wait}s, proceeding with fallback"
+  return 1
+}
+
+# 确保 mosdns 必需的规则文件存在（空文件也可被加载，仅无分流效果）
+REQUIRED_RULES="direct-list.txt china_ip_list.txt apple-cn.txt proxy-list.txt geosite-gfw.txt"
+ensure_rule_files() {
+  for f in $REQUIRED_RULES; do
+    [ -f "$RULES/$f" ] || { touch "$RULES/$f"; log "created empty fallback $f"; }
+  done
+}
 
 dl() {
   name="$1"
@@ -70,7 +89,14 @@ log "crond started $(cat /etc/timezone 2>/dev/null || echo UTC)"
 /sync-ai.sh
 
 # --- 3. 循环：拉规则 → 启动 mosdns → 等待；mosdns 退出后（被 crond kill 或崩溃）再次拉规则并启动 ---
+FIRST_RUN=1
 while true; do
+  if [ "$FIRST_RUN" = 1 ]; then
+    wait_for_network
+    ensure_rule_files
+    FIRST_RUN=0
+  fi
+
   dl direct-list.txt   "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt"
   dl china_ip_list.txt "https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt"
   dl apple-cn.txt      "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt"
