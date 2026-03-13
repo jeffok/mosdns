@@ -40,9 +40,11 @@ count_dns() {
 
 TEMPLATE=/opt/mosdns/config.template.yaml
 if [ -f "$TEMPLATE" ]; then
+  ECS_PRESET="${ECS_PRESET:-}"
   sed -e "s|__CONCURRENT_CN__|$(count_dns "$DNS_CN")|" \
       -e "s|__CONCURRENT_GLOBAL__|$(count_dns "$DNS_GLOBAL")|" \
       -e "s|__CONCURRENT_AI__|$(count_dns "$DNS_AI")|" \
+      -e "s|__ECS_PRESET__|$ECS_PRESET|" \
       "$TEMPLATE" > /tmp/config.tmp
 
   CN_YAML=$(dns_to_yaml "$DNS_CN")
@@ -78,7 +80,7 @@ DOEOF
     fi
   ;; esac
 
-  log "config.yaml generated: CN=$(count_dns "$DNS_CN") GLOBAL=$(count_dns "$DNS_GLOBAL") AI=$(count_dns "$DNS_AI")"
+  log "config.yaml generated: CN=$(count_dns "$DNS_CN") GLOBAL=$(count_dns "$DNS_GLOBAL") AI=$(count_dns "$DNS_AI") ECS_PRESET=${ECS_PRESET:-<empty>}"
 fi
 
 # ---- 复制镜像内置规则文件 ----
