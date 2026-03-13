@@ -14,10 +14,14 @@ run_test() {
     local name="$1"
     local cmd="$2"
     echo "=== $name ==="
-    if eval "$cmd"; then
-        echo "OK"
+    local out
+    out=$(eval "$cmd" 2>&1)
+    local ret=$?
+    echo "$out"
+    if [[ $ret -eq 0 && -n "$out" ]]; then
+        echo "[OK]"
     else
-        echo "FAIL"
+        echo "[FAIL exit=$ret]"
         return 1
     fi
     echo ""
