@@ -1,6 +1,6 @@
 FROM irinesistiana/mosdns:v5.3.3
 
-RUN apk add --no-cache tzdata openssh-client sshpass \
+RUN apk add --no-cache tzdata \
  && rm -rf /var/cache/apk/* /tmp/*
 
 COPY scripts/config.template.yaml /opt/mosdns/
