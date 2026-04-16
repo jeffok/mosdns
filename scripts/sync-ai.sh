@@ -2,7 +2,7 @@
 # sync-ai.sh — 解析 AI 域名，通过 REST API 写入 RouterOS ai-sgp address-list
 RULES=/etc/mosdns/rules
 AI_LIST="$RULES/ai-list.txt"
-AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/mosdns/master/rules/ai-list.txt}"
+AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/mosdns/main/rules/ai-list.txt}"
 LIST="ai-sgp"
 COMMENT="mosdns-ai"
 TTL="1800s"
