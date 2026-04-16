@@ -108,14 +108,17 @@ dig @127.0.0.1 google.com   # 应走国际 DNS
 | ROS_HOST      | 空                                      | RouterOS SSH 地址（如 192.168.8.254:6220），用于同步 AI IP 列表 |
 | ROS_USER      | admin                                   | RouterOS 用户名                                        |
 | ROS_PASS      | 空                                      | RouterOS 密码                                         |
+| AI_LIST_URL   | GitHub rules/ai-list.txt                | AI 域名列表远端地址，`sync-ai.sh` 每 2 分钟自动拉取                     |
+| RELOAD_ON_AI_LIST_CHANGE | 1                           | 当远端 AI 列表变更时，自动触发 mosdns 重载让分流规则立即生效              |
 | CONTAINER_DNS | 空                                      | **仅 RouterOS 容器需要**，设为 8.8.8.8                      |
 | RELOAD_DELAY  | 0                                      | 每日规则更新前的延迟秒数，多站点可以错开                                |
 
 
 ## 日常维护
 
-- **规则自动更新**：容器每天凌晨 04:30 自动拉取最新规则并重载，不需要手动操作
-- **AI 列表同步**：每 2 分钟把 AI 域名解析的 IP 同步到 RouterOS 的 address-list，用于策略路由
+- **规则自动更新**：容器每天凌晨 04:30 自动拉取基础规则并重载，不需要手动操作
+- **AI 列表外加载**：`sync-ai.sh` 每 2 分钟拉取 `AI_LIST_URL`（默认仓库 `rules/ai-list.txt`），无需重建镜像
+- **AI 分流自动生效**：远端 `ai-list` 变更后自动触发 mosdns 重载，并同步 AI IP 到 RouterOS address-list
 - **更新镜像**：Docker Compose 执行 `docker compose pull && docker compose up -d`；RouterOS 需要先停止删除旧容器，再重新创建
 
 ## 常见问题

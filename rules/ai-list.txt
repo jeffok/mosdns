@@ -11,6 +11,8 @@ auth0.openai.com
 auth.openai.com
 chatgpt.com
 platform.openai.com
+files.openai.com
+sora.com
 # 静态资源域名（内容加载必需）
 oaiusercontent.com
 oaistatic.com
@@ -27,9 +29,42 @@ help.openai.com
 # Google AI / Gemini
 # 主域名（浏览器访问）
 gemini.google.com
-# API 端点
+# Gemini API / Vertex AI 常用端点
 generativelanguage.googleapis.com
+aiplatform.googleapis.com
+# API 端点
 embeddedgeneration.googleapis.com
 # 开发者和 Studio
 ai.google.dev
 aistudio.google.com
+bard.google.com
+alkalimakersuite-pa.clients6.google.com
+
+# Claude / Anthropic
+claude.ai
+anthropic.com
+api.anthropic.com
+console.anthropic.com
+claudeusercontent.com
+www.anthropic.com
+cdn.anthropic.com
+
+# Microsoft Copilot / OpenAI on Bing
+copilot.microsoft.com
+bing.com
+sydney.bing.com
+edgeservices.bing.com
+
+# xAI / Grok
+grok.com
+x.ai
+api.x.ai
+
+# Perplexity
+perplexity.ai
+www.perplexity.ai
+api.perplexity.ai
+
+# Meta AI
+meta.ai
+www.meta.ai

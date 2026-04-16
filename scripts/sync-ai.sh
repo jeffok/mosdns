@@ -2,11 +2,63 @@
 # sync-ai.sh — 解析 AI 域名，通过 REST API 写入 RouterOS ai-sgp address-list
 RULES=/etc/mosdns/rules
 AI_LIST="$RULES/ai-list.txt"
+AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/mosdns/master/rules/ai-list.txt}"
 LIST="ai-sgp"
 COMMENT="mosdns-ai"
 TTL="1800s"
 _GL_FIRST=$(echo "${DNS_GLOBAL:-}" | cut -d',' -f1 | xargs)
 DNS="${DNS_SERVER:-${_GL_FIRST:-10.100.89.3}}"
+PIDFILE="${PIDFILE:-/tmp/mosdns.pid}"
+RELOAD_ON_AI_LIST_CHANGE="${RELOAD_ON_AI_LIST_CHANGE:-1}"
+AI_LIST_CHANGED=0
+
+refresh_ai_list() {
+  [ -z "$AI_LIST_URL" ] && return 0
+  tmp="${AI_LIST}.tmp"
+  if wget -q -O "$tmp" "$AI_LIST_URL" && [ -s "$tmp" ]; then
+    if [ -f "$AI_LIST" ] && cmp -s "$AI_LIST" "$tmp"; then
+      rm -f "$tmp"
+      return 0
+    fi
+    mv "$tmp" "$AI_LIST"
+    AI_LIST_CHANGED=1
+    echo "[sync-ai] refreshed ai-list from remote (changed)"
+    return 0
+  fi
+  rm -f "$tmp"
+  if [ -s "$AI_LIST" ]; then
+    echo "[sync-ai] WARN: refresh failed, using local ai-list"
+    return 0
+  fi
+  echo "[sync-ai] WARN: ai-list missing and remote refresh failed"
+  return 1
+}
+
+request_mosdns_reload() {
+  [ "$RELOAD_ON_AI_LIST_CHANGE" = "0" ] && return 0
+  [ "$RELOAD_ON_AI_LIST_CHANGE" = "false" ] && return 0
+  if [ -s "$PIDFILE" ]; then
+    pid="$(cat "$PIDFILE" 2>/dev/null)"
+    if [ -n "$pid" ] && kill "$pid" 2>/dev/null; then
+      echo "[sync-ai] ai-list changed, requested mosdns reload (pid=$pid)"
+      return 0
+    fi
+  fi
+  echo "[sync-ai] WARN: ai-list changed, but mosdns pid not found"
+}
+
+resolve_ipv4s() {
+  domain="$1"
+  nslookup "$domain" "$DNS" 2>/dev/null | awk '
+    $1 == "Name:" { seen_name = 1; next }
+    seen_name && $1 == "Address:" { print $2; next }
+    seen_name && $1 == "Address" && $2 ~ /^[0-9]+:$/ { print $3; next }
+  ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u
+}
+
+[ -d "$RULES" ] || mkdir -p "$RULES"
+refresh_ai_list || exit 0
+[ "$AI_LIST_CHANGED" -eq 1 ] && request_mosdns_reload
 
 [ -z "$ROS_HOST" ] && exit 0
 [ -z "$ROS_PASS" ] && exit 0
@@ -56,7 +108,7 @@ while IFS= read -r line; do
   [ -z "$domain" ] && continue
   DOMAIN_COUNT=$((DOMAIN_COUNT + 1))
 
-  for ip in $(nslookup "$domain" "$DNS" 2>/dev/null | awk '/^Address:/{print $2}' | grep -v ":"); do
+  for ip in $(resolve_ipv4s "$domain"); do
     if is_valid_ipv4 "$ip"; then
       IP_COUNT=$((IP_COUNT + 1))
       resp=$(api_post "${API}/add" "{\"list\":\"${LIST}\",\"address\":\"${ip}\",\"timeout\":\"${TTL}\",\"comment\":\"${COMMENT}\"}")
