@@ -2,7 +2,7 @@
 # sync-ai.sh — 解析 AI 域名，通过 REST API 写入 RouterOS ai-sgp address-list
 RULES=/etc/mosdns/rules
 AI_LIST="$RULES/ai-list.txt"
-AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/mosdns/main/rules/ai-list.txt}"
+AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/mosdns/main/rules/ai-list.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/mosdns/main/rules/ai-list.txt}"
 LIST="ai-sgp"
 COMMENT="mosdns-ai"
 TTL="1800s"
@@ -15,23 +15,42 @@ AI_LIST_CHANGED=0
 refresh_ai_list() {
   [ -z "$AI_LIST_URL" ] && return 0
   tmp="${AI_LIST}.tmp"
-  if wget -q -O "$tmp" "$AI_LIST_URL" && [ -s "$tmp" ]; then
-    if [ -f "$AI_LIST" ] && cmp -s "$AI_LIST" "$tmp"; then
-      rm -f "$tmp"
+
+  downloaded=0
+
+  # 安全解析多源链接
+  old_ifs="$IFS"
+  IFS='|'
+  set -- $AI_LIST_URL
+  IFS="$old_ifs"
+
+  for url; do
+    url=$(echo "$url" | xargs)
+    [ -z "$url" ] && continue
+    
+    # 一旦下载成功立即 break
+    if wget -q --timeout=10 -O "$tmp" "$url" && [ -s "$tmp" ]; then
+      if [ -f "$AI_LIST" ] && cmp -s "$AI_LIST" "$tmp"; then
+        rm -f "$tmp"
+      else
+        mv "$tmp" "$AI_LIST"
+        AI_LIST_CHANGED=1
+        echo "[sync-ai] refreshed ai-list from $url (changed)"
+      fi
+      downloaded=1
+      break
+    fi
+    rm -f "$tmp"
+  done
+
+  if [ "$downloaded" = "0" ]; then
+    if [ -s "$AI_LIST" ]; then
+      echo "[sync-ai] WARN: refresh failed, using local ai-list"
       return 0
     fi
-    mv "$tmp" "$AI_LIST"
-    AI_LIST_CHANGED=1
-    echo "[sync-ai] refreshed ai-list from remote (changed)"
-    return 0
+    echo "[sync-ai] WARN: ai-list missing and remote refresh failed"
+    return 1
   fi
-  rm -f "$tmp"
-  if [ -s "$AI_LIST" ]; then
-    echo "[sync-ai] WARN: refresh failed, using local ai-list"
-    return 0
-  fi
-  echo "[sync-ai] WARN: ai-list missing and remote refresh failed"
-  return 1
 }
 
 request_mosdns_reload() {

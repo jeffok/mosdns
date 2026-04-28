@@ -5,13 +5,13 @@ mkdir -p "$RULES"
 
 log() { echo "[entrypoint] $*"; }
 
-# 规则下载源（名称|URL）
+# 规则下载源（名称|URL1|URL2|... 多源按序尝试）
 RULE_SOURCES="
-direct-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt
-china_ip_list.txt|https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt
-apple-cn.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt
-proxy-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt
-geosite-gfw.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt
+direct-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt
+china_ip_list.txt|https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt
+apple-cn.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt
+proxy-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt
+geosite-gfw.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt
 "
 
 # ROS 容器不会自动注入 DNS
@@ -88,34 +88,94 @@ if [ -d /opt/mosdns-rules ]; then
   for f in /opt/mosdns-rules/*; do [ -f "$f" ] && cp "$f" "$RULES/"; done
 fi
 
-# ROS 容器 veth 启动后需要等一会儿才能连外网
+# 网络可用性检查（不依赖本机 DNS，避免 network_mode: host 时的指向自己的死锁）
 wait_for_network() {
-  max_wait=180; elapsed=0
+  dns="${DOWNLOAD_DNS:-8.8.8.8}"
+  dns=$(echo "$dns" | cut -d',' -f1 | xargs)
+  # 临时覆盖 resolv.conf 以便连通性检查
+  echo "nameserver $dns" > /tmp/resolv-wait.conf
+  max_wait=30; elapsed=0
   while [ $elapsed -lt $max_wait ]; do
-    nslookup raw.githubusercontent.com >/dev/null 2>&1 && { log "network ready (${elapsed}s)"; return 0; }
-    sleep 5; elapsed=$((elapsed + 5))
+    nslookup raw.githubusercontent.com "$dns" >/dev/null 2>&1 && { log "network ready (${elapsed}s)"; return 0; }
+    sleep 3; elapsed=$((elapsed + 3))
   done
-  log "WARN network not ready after ${max_wait}s"
-  return 1
+  log "WARN network not ready after ${max_wait}s, will proceed anyway"
+  return 0
 }
 
+# 检查规则文件是否过期（秒），未设置或0表示每次都下载
+RULE_FILE_MAX_AGE="${RULE_FILE_MAX_AGE:-86400}"
+
 ensure_rule_files() {
-  echo "$RULE_SOURCES" | while IFS='|' read -r name url; do
+  echo "$RULE_SOURCES" | while IFS='|' read -r name urls; do
     name=$(echo "$name" | xargs)
     [ -z "$name" ] && continue
     [ -f "$RULES/$name" ] || { touch "$RULES/$name"; log "created empty fallback $name"; }
   done
 }
 
+is_file_expired() {
+  [ "$RULE_FILE_MAX_AGE" = "0" ] && return 0
+  [ ! -f "$1" ] && return 0
+  # 使用 find -mmin 判断是否过期，兼容 BusyBox (Alpine)
+  minutes=$((RULE_FILE_MAX_AGE / 60))
+  if find "$1" -maxdepth 0 -mmin -$minutes | grep -q .; then
+    return 1 # File is recent (not expired)
+  fi
+  return 0 # Expired
+}
+
+_download_dns_override() {
+  dns="${DOWNLOAD_DNS:-${DNS_GLOBAL:-8.8.8.8}}"
+  dns=$(echo "$dns" | cut -d',' -f1 | xargs)
+  [ -n "$dns" ] && {
+    echo "nameserver $dns" > /etc/resolv.conf
+    log "download resolv.conf <- $dns"
+  }
+}
+
 dl_rules() {
-  echo "$RULE_SOURCES" | while IFS='|' read -r name url; do
-    name=$(echo "$name" | xargs); url=$(echo "$url" | xargs)
+  _download_dns_override
+
+  echo "$RULE_SOURCES" | while IFS='|' read -r name url_and_mirrors; do
+    name=$(echo "$name" | xargs)
     [ -z "$name" ] && continue
+
+    local_file="$RULES/$name"
     tmp="$RULES/${name}.tmp"
-    if wget -q -O "$tmp" "$url" && [ -s "$tmp" ]; then
-      mv "$tmp" "$RULES/$name"; log "ok $name"
-    else
-      rm -f "$tmp"; log "WARN $name download failed"
+
+    # 检查是否需要更新
+    if [ -f "$local_file" ] && [ -s "$local_file" ]; then
+      if ! is_file_expired "$local_file"; then
+        continue
+      fi
+    fi
+
+    downloaded=0
+
+    # 安全解析多源链接，避免 IFS 切换带来的副作用
+    old_ifs="$IFS"
+    IFS='|'
+    set -- $url_and_mirrors
+    IFS="$old_ifs"
+
+    for url; do
+      url=$(echo "$url" | xargs)
+      [ -z "$url" ] && continue
+      
+      # 一旦下载成功立即 break，不会尝试后续镜像源
+      if wget -q --timeout=10 -O "$tmp" "$url" && [ -s "$tmp" ]; then
+        mv "$tmp" "$local_file"
+        log "ok $name from $url"
+        downloaded=1
+        break
+      fi
+      rm -f "$tmp"
+    done
+
+    # 只有所有源都失败且本地没有文件时，才打印警告
+    if [ "$downloaded" = "0" ] && [ ! -s "$local_file" ]; then
+      log "WARN $name all sources failed and no local copy"
     fi
   done
 }
@@ -125,7 +185,12 @@ RELOAD_DELAY="${RELOAD_DELAY:-0}"
 touch /etc/mosdns/cache.dump
 {
   printf "30 4 * * * sleep %s; kill \$(cat %s 2>/dev/null) 2>/dev/null\n" "$RELOAD_DELAY" "$PIDFILE"
-  printf "*/2 * * * * /sync-ai.sh >/dev/null 2>&1\n"
+  printf "DNS_GLOBAL='%s'\n" "$DNS_GLOBAL"
+  printf "DNS_SERVER='%s'\n" "$DNS_SERVER"
+  printf "DOWNLOAD_DNS='%s'\n" "$DOWNLOAD_DNS"
+  cat <<'CRONAI'
+*/2 * * * * /sync-ai.sh >/dev/null 2>&1
+CRONAI
 } | crontab -
 crond -b -l 2
 log "crond started $(cat /etc/timezone 2>/dev/null || echo UTC)"
