@@ -14,17 +14,14 @@ proxy-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/re
 geosite-gfw.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt
 "
 
-# ROS 容器不会自动注入 DNS，优先使用 DOWNLOAD_DNS，否则使用 CONTAINER_DNS
-# 若都为空，则自动取 DNS_GLOBAL 的第一个 IP 作为内部 DNS
-_CONTAINER_DNS="${DOWNLOAD_DNS:-${CONTAINER_DNS}}"
-if [ -z "$_CONTAINER_DNS" ]; then
-  _CONTAINER_DNS=$(echo "${DNS_GLOBAL:-8.8.8.8}" | cut -d',' -f1 | xargs)
+# ROS 容器不会自动注入 DNS，必须使用可靠的公共 DNS 以保证规则下载成功
+# 默认使用 8.8.8.8，确保即使 DNS_GLOBAL 也是国内 IP 也能正常拉取规则
+if [ -z "$CONTAINER_DNS" ]; then
+  CONTAINER_DNS="8.8.8.8"
 fi
 
-if [ -n "$_CONTAINER_DNS" ]; then
-  echo "nameserver $_CONTAINER_DNS" > /etc/resolv.conf
-  log "set resolv.conf to $_CONTAINER_DNS"
-fi
+echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
+log "set resolv.conf to $CONTAINER_DNS"
 
 # ---- 从环境变量生成 config.yaml ----
 DNS_CN="${DNS_CN:-119.29.29.29,223.5.5.5,114.114.114.114}"
