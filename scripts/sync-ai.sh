@@ -6,8 +6,8 @@ AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/mosdns/main
 LIST="ai-sgp"
 COMMENT="mosdns-ai"
 TTL="1800s"
-_GL_FIRST=$(echo "${DNS_GLOBAL:-}" | cut -d',' -f1 | xargs)
-DNS="${DNS_SERVER:-${_GL_FIRST:-10.100.89.3}}"
+# 优先使用 CONTAINER_DNS（容器内部专用 DNS），确保 AI 域名解析不受 DNS_GLOBAL 影响
+DNS="${CONTAINER_DNS:-8.8.8.8}"
 PIDFILE="${PIDFILE:-/tmp/mosdns.pid}"
 RELOAD_ON_AI_LIST_CHANGE="${RELOAD_ON_AI_LIST_CHANGE:-1}"
 AI_LIST_CHANGED=0

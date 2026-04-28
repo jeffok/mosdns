@@ -180,6 +180,8 @@ dl_rules() {
 RELOAD_DELAY="${RELOAD_DELAY:-0}"
 touch /etc/mosdns/cache.dump
 {
+  printf "CONTAINER_DNS=%s\n" "$CONTAINER_DNS"
+  printf "RELOAD_DELAY=%s\n" "$RELOAD_DELAY"
   printf "30 4 * * * sleep %s; kill \$(cat %s 2>/dev/null) 2>/dev/null\n" "$RELOAD_DELAY" "$PIDFILE"
   cat <<'CRONAI'
 */2 * * * * /sync-ai.sh >/dev/null 2>&1
