@@ -1,70 +1,72 @@
 # ai domains for forward_ai
-# AI 域名列表（仅用于分流到 forward_ai，控制走 SGP/新加坡）
-# 保持精简，避免把过大域（如全量 googleapis.com）拉去新加坡
+# AI 域名列表（仅用于分流到 forward_ai，强制走 SGP/新加坡节点）
+# 保持精简，仅保留核心 Chat 界面、API 和静态资源，避免误杀普通服务
 
-# ChatGPT / OpenAI
-# 核心域名（浏览器访问必需）
-chat.openai.com
+# ================== OpenAI / ChatGPT ==================
+# 核心 Chat 界面与登录
 openai.com
-api.openai.com
+chat.openai.com
+chatgpt.com
 auth0.openai.com
 auth.openai.com
-chatgpt.com
+# API 与开发者平台
+api.openai.com
 platform.openai.com
+developers.openai.com
+help.openai.com
+setup.auth.openai.com
+# 内容与文件存储
 files.openai.com
-sora.com
-# 静态资源域名（内容加载必需）
+# 静态资源与 CDN（网页图片、脚本必需）
 oaiusercontent.com
 oaistatic.com
 cdn.oaistatic.com
 www.oaistatic.com
-# 手机 app 专用域名
+cdn.openai.com
+# 移动端专用
 ios.chat.openai.com
 android.chat.openai.com
-# 开发者相关（可选，按需添加）
-developers.openai.com
-setup.auth.openai.com
-help.openai.com
+# Sora / 视频生成
+sora.com
 
-# Google AI / Gemini
-# 主域名（浏览器访问）
+# ================== Google Gemini / AI ==================
+# 核心 Chat 界面
 gemini.google.com
-# Gemini API / Vertex AI 常用端点
-generativelanguage.googleapis.com
-aiplatform.googleapis.com
-# API 端点
-embeddedgeneration.googleapis.com
-# 开发者和 Studio
+bard.google.com
 ai.google.dev
 aistudio.google.com
-bard.google.com
+# API 端点（SDK/客户端必需）
+generativelanguage.googleapis.com
+aiplatform.googleapis.com
+embeddedgeneration.googleapis.com
 alkalimakersuite-pa.clients6.google.com
 
-# Claude / Anthropic
+# ================== Anthropic / Claude ==================
+# 核心 Chat 界面
 claude.ai
-anthropic.com
+# API 与控制台
 api.anthropic.com
 console.anthropic.com
+# 静态资源与 CDN
 claudeusercontent.com
-www.anthropic.com
 cdn.anthropic.com
 
-# Microsoft Copilot / OpenAI on Bing
+# ================== Microsoft Copilot ==================
+# Copilot 主界面与服务端点
 copilot.microsoft.com
-bing.com
 sydney.bing.com
 edgeservices.bing.com
 
-# xAI / Grok
-grok.com
-x.ai
-api.x.ai
-
-# Perplexity
+# ================== Perplexity AI ==================
 perplexity.ai
 www.perplexity.ai
 api.perplexity.ai
 
-# Meta AI
+# ================== xAI / Grok ==================
+x.ai
+grok.com
+api.x.ai
+
+# ================== Meta AI ==================
 meta.ai
 www.meta.ai
