@@ -83,9 +83,17 @@ DOEOF
   log "config.yaml generated: CN=$(count_dns "$DNS_CN") GLOBAL=$(count_dns "$DNS_GLOBAL") AI=$(count_dns "$DNS_AI") ECS_PRESET=${ECS_PRESET:-<empty>}"
 fi
 
-# ---- 复制镜像内置规则文件 ----
+# ---- 复制镜像内置规则文件（仅当挂载目录为空或文件缺失时填充）----
 if [ -d /opt/mosdns-rules ]; then
-  for f in /opt/mosdns-rules/*; do [ -f "$f" ] && cp "$f" "$RULES/"; done
+  for f in /opt/mosdns-rules/*; do
+    if [ -f "$f" ]; then
+      dest="$RULES/$(basename "$f")"
+      if [ ! -f "$dest" ]; then
+        cp "$f" "$dest"
+        log "initialized missing $(basename "$f") from image"
+      fi
+    fi
+  done
 fi
 
 # 网络可用性检查（不依赖本机 DNS，避免 network_mode: host 时的指向自己的死锁）
