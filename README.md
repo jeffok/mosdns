@@ -46,9 +46,7 @@ ROS 容器中运行 MosDNS，需要将虚拟网卡加入网桥并配置环境变
 | **ROS_USER** | admin | ROS 管理员用户名 |
 | **ROS_PASS** | 空 | ROS 管理员密码 |
 | **AI_LIST_URL** | GitHub rules/ai-list.txt | AI 域名列表远端地址（支持自定义 API），默认每 2 分钟检查更新 |
-| **RELOAD_ON_AI_LIST_CHANGE** | 1 | AI 列表变更后是否自动触发 MosDNS 重载 |
-| **CONTAINER_DNS** | 空 | **ROS 必须设置**：容器内部网络 DNS，否则无法更新规则 |
-| **DOWNLOAD_DNS** | 同 DNS_GLOBAL | 容器下载规则时临时指定的 DNS |
+| **CONTAINER_DNS** | 空 (默认跟随 DNS_GLOBAL) | 容器内部下载规则/联网时使用的 DNS |
 | **RULE_FILE_MAX_AGE** | 82800 (23小时) | 规则文件保留秒数，超过此时间则触发更新，`0` 为每次强制下载 |
 | **RELOAD_DELAY** | 0 | 每日 04:30 规则重载前的延迟秒数 |
 
@@ -108,8 +106,8 @@ ECS (EDNS Client Subnet) 允许 MosDNS 在向上游 DNS 发送查询时，携带
 ## 常见问题
 
 **1. 规则下载失败 (Connection refused/timeout)**
-* **原因**：ROS/容器内部 DNS 无法解析 GitHub。
-* **解决**：配置 `DOWNLOAD_DNS=8.8.8.8`。
+* **原因**：容器内部 DNS 无法解析 GitHub。
+* **解决**：配置 `CONTAINER_DNS=8.8.8.8`。
 
 **2. ROS 启动后所有查询返回 SERVFAIL**
 * **原因**：ROS DNS 劫持规则捕获了 MosDNS 的 53 端口查询，形成回环。

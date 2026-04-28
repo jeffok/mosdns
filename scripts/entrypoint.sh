@@ -14,10 +14,16 @@ proxy-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/re
 geosite-gfw.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt
 "
 
-# ROS 容器不会自动注入 DNS
-if [ -n "$CONTAINER_DNS" ]; then
-  echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
-  log "resolv.conf <- $CONTAINER_DNS"
+# ROS 容器不会自动注入 DNS，优先使用 DOWNLOAD_DNS，否则使用 CONTAINER_DNS
+# 若都为空，则自动取 DNS_GLOBAL 的第一个 IP 作为内部 DNS
+_CONTAINER_DNS="${DOWNLOAD_DNS:-${CONTAINER_DNS}}"
+if [ -z "$_CONTAINER_DNS" ]; then
+  _CONTAINER_DNS=$(echo "${DNS_GLOBAL:-8.8.8.8}" | cut -d',' -f1 | xargs)
+fi
+
+if [ -n "$_CONTAINER_DNS" ]; then
+  echo "nameserver $_CONTAINER_DNS" > /etc/resolv.conf
+  log "set resolv.conf to $_CONTAINER_DNS"
 fi
 
 # ---- 从环境变量生成 config.yaml ----
@@ -96,15 +102,11 @@ if [ -d /opt/mosdns-rules ]; then
   done
 fi
 
-# 网络可用性检查（不依赖本机 DNS，避免 network_mode: host 时的指向自己的死锁）
+# 网络可用性检查（依赖系统解析，已在脚本开头设置）
 wait_for_network() {
-  dns="${DOWNLOAD_DNS:-8.8.8.8}"
-  dns=$(echo "$dns" | cut -d',' -f1 | xargs)
-  # 临时覆盖 resolv.conf 以便连通性检查
-  echo "nameserver $dns" > /tmp/resolv-wait.conf
-  max_wait=30; elapsed=0
+  max_wait=60; elapsed=0
   while [ $elapsed -lt $max_wait ]; do
-    nslookup raw.githubusercontent.com "$dns" >/dev/null 2>&1 && { log "network ready (${elapsed}s)"; return 0; }
+    nslookup raw.githubusercontent.com >/dev/null 2>&1 && { log "network ready (${elapsed}s)"; return 0; }
     sleep 3; elapsed=$((elapsed + 3))
   done
   log "WARN network not ready after ${max_wait}s, will proceed anyway"
@@ -133,18 +135,7 @@ is_file_expired() {
   return 0 # Expired
 }
 
-_download_dns_override() {
-  dns="${DOWNLOAD_DNS:-${DNS_GLOBAL:-8.8.8.8}}"
-  dns=$(echo "$dns" | cut -d',' -f1 | xargs)
-  [ -n "$dns" ] && {
-    echo "nameserver $dns" > /etc/resolv.conf
-    log "download resolv.conf <- $dns"
-  }
-}
-
 dl_rules() {
-  _download_dns_override
-
   echo "$RULE_SOURCES" | while IFS='|' read -r name url_and_mirrors; do
     name=$(echo "$name" | xargs)
     [ -z "$name" ] && continue
@@ -193,9 +184,6 @@ RELOAD_DELAY="${RELOAD_DELAY:-0}"
 touch /etc/mosdns/cache.dump
 {
   printf "30 4 * * * sleep %s; kill \$(cat %s 2>/dev/null) 2>/dev/null\n" "$RELOAD_DELAY" "$PIDFILE"
-  printf "DNS_GLOBAL='%s'\n" "$DNS_GLOBAL"
-  printf "DNS_SERVER='%s'\n" "$DNS_SERVER"
-  printf "DOWNLOAD_DNS='%s'\n" "$DOWNLOAD_DNS"
   cat <<'CRONAI'
 */2 * * * * /sync-ai.sh >/dev/null 2>&1
 CRONAI
