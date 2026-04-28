@@ -6,4 +6,5 @@ services:
     restart: unless-stopped
     volumes:
       - ./certs:/etc/mosdns/certs:ro
+      - ./rules:/etc/mosdns/rules
     env_file: .env
