@@ -8,6 +8,9 @@ COPY scripts/entrypoint.sh /entrypoint.sh
 COPY scripts/sync-ai.sh /sync-ai.sh
 COPY rules/ /opt/mosdns-rules/
 
+# 引入自动构建缓存参数：确保每周定时构建时强制重新执行后续指令
+ARG CACHEBUST
+
 RUN chmod +x /entrypoint.sh /sync-ai.sh \
  && (wget -q -O /opt/mosdns-rules/direct-list.txt   "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt"   || true) \
  && (wget -q -O /opt/mosdns-rules/china_ip_list.txt "https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt" || true) \
