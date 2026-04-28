@@ -112,7 +112,7 @@ wait_for_network() {
 }
 
 # 检查规则文件是否过期（秒），未设置或0表示每次都下载
-RULE_FILE_MAX_AGE="${RULE_FILE_MAX_AGE:-86400}"
+RULE_FILE_MAX_AGE="${RULE_FILE_MAX_AGE:-82800}"
 
 ensure_rule_files() {
   echo "$RULE_SOURCES" | while IFS='|' read -r name urls; do

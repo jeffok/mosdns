@@ -104,13 +104,16 @@ dig @127.0.0.1 google.com   # 应走国际 DNS
 | TZ            | Asia/Shanghai                          | 时区                                                  |
 | DOH_ENABLED   | 0                                      | 设为 1 开启 DoH，需要在 certs/ 放证书                          |
 | DOH_CERT      | /etc/mosdns/certs/fullchain.pem        | DoH 证书路径（容器内）                                       |
-| DOH_KEY       | /etc/mosdns/certs/privkey.pem          | DoH 私钥路径（容器内）                                       |
+| DOH_KEY       | /etc/mosdns/certs/privkey.pem          | DoH 密钥路径（容器内）                                       |
 | ROS_HOST      | 空                                      | RouterOS SSH 地址（如 192.168.8.254:6220），用于同步 AI IP 列表 |
 | ROS_USER      | admin                                   | RouterOS 用户名                                        |
 | ROS_PASS      | 空                                      | RouterOS 密码                                         |
 | AI_LIST_URL   | GitHub rules/ai-list.txt                | AI 域名列表远端地址，`sync-ai.sh` 每 2 分钟自动拉取                     |
 | RELOAD_ON_AI_LIST_CHANGE | 1                           | 当远端 AI 列表变更时，自动触发 mosdns 重载让分流规则立即生效              |
 | CONTAINER_DNS | 空                                      | **仅 RouterOS 容器需要**，设为 8.8.8.8                      |
+| DOWNLOAD_DNS  | 空 (默认跟随 DNS_GLOBAL)                    | 容器内部下载规则时临时覆盖的 DNS，不修改对外服务                     |
+| RULE_FILE_MAX_AGE | 82800 (23小时)                       | 规则文件过期秒数，0 为每次强制下载                            |
+| RELOAD_DELAY  | 0                                      | 每日规则更新前的延迟秒数，多站点可以错开                                |
 | RELOAD_DELAY  | 0                                      | 每日规则更新前的延迟秒数，多站点可以错开                                |
 
 
