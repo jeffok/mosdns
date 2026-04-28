@@ -10,9 +10,9 @@
 适用于 Linux 主机或 NAS。
 
 ```bash
-mkdir -p mosdns/certs && cd mosdns
+mkdir -p mosdns/certs mosdns/rules && cd mosdns
 
-# 放入 docker-compose.yml 和 .env.example，然后：
+# 将 docker-compose.yml 和 .env.example 放入目录，然后：
 cp .env.example .env
 vi .env                # 按需修改 DNS 上游等参数
 
@@ -22,6 +22,9 @@ docker compose pull && docker compose up -d
 dig @127.0.0.1 baidu.com    # 应走国内 DNS
 dig @127.0.0.1 google.com   # 应走国际 DNS
 ```
+
+**关于规则文件（`rules/` 目录）：**
+容器首次启动时会自动下载初始化的规则文件。如果你想在宿主机上管理（例如 `ai-list.txt`），可以在 `docker-compose.yml` 中挂载 `./rules:/etc/mosdns/rules`。容器会优先读取你挂载的文件，且不会被镜像内置文件覆盖。
 
 如果需要 DoH，在 `certs/` 目录放入证书文件，并在 `.env` 中设置 `DOH_ENABLED=1`。
 
@@ -44,7 +47,7 @@ dig @127.0.0.1 google.com   # 应走国际 DNS
 /interface/bridge/port add bridge=br-lan interface=veth-mosdns
 ```
 
-> 把 IP 和网桥名改成你自己的。
+> 将 IP 和网桥名 (`br-lan`) 替换为你实际的值。
 
 **3. 设置环境变量：**
 
@@ -55,8 +58,8 @@ dig @127.0.0.1 google.com   # 应走国际 DNS
 /container envs add list=ENV_MOSDNS key=CONTAINER_DNS value=8.8.8.8
 ```
 
-> `CONTAINER_DNS` 是 RouterOS 容器必须设的，不然容器内部无法解析域名。
-> 其他可选变量见下方环境变量表。
+> `CONTAINER_DNS` 是 RouterOS 容器必须的，否则容器内部无法联网。
+> 其他可选变量见下方表格。
 
 **4. 创建并启动容器：**
 
@@ -67,25 +70,24 @@ dig @127.0.0.1 google.com   # 应走国际 DNS
 /container start mosdns
 ```
 
-**5. 把路由器 DNS 指向 mosdns：**
+**5. 将系统 DNS 指向 mosdns：**
 
 ```routeros
 /ip dns set servers=192.168.8.252
 ```
 
-**6.（可选）自动拉起 — 容器崩溃时自动重启：**
+**6.（可选）看门狗 — 容器崩溃自动重启：**
 
 ```routeros
 /system script add name=mosdns-watchdog source={ /container start mosdns }
 /system scheduler add name=mosdns-watchdog interval=5m on-event=mosdns-watchdog
 ```
 
-**7.（重要）如果路由器有 DNS 劫持规则，必须排除 mosdns IP：**
+**7.（重要）排除 DNS 劫持：**
 
-如果你配置了 `dstnat redirect dst-port=53` 这类规则把所有 DNS 流量劫持到路由器自身，
-那 mosdns 的上游查询也会被劫持回来，形成死循环，导致所有查询返回 SERVFAIL。
-
-解决方法：在劫持规则里把 mosdns 的 IP 排除掉。
+如果你配置了 `dstnat redirect dst-port=53` 把所有 DNS 劫持到路由器，
+那 mosdns 的上游查询也会被劫持回来导致死循环。
+必须在 NAT 规则中把 mosdns IP 排除。
 
 ```routeros
 /ip/firewall/nat/set [find comment~"force lan dns"] src-address=!192.168.8.252
@@ -95,45 +97,42 @@ dig @127.0.0.1 google.com   # 应走国际 DNS
 
 复制 `.env.example` 为 `.env`，按需修改。
 
+| 变量 | 默认值 | 说明 |
+| ------------- | ------------- | ------------- |
+| **DNS_CN** | 119.29.29.29,223.5.5.5,114.114.114.114 | 国内域名上游 DNS，逗号分隔 |
+| **DNS_GLOBAL** | 1.1.1.1,8.8.8.8,9.9.9.9 | 国际域名上游 DNS |
+| **DNS_AI** | 同 DNS_GLOBAL | AI 域名上游 DNS（如需分流到特定网络） |
+| **TZ** | Asia/Shanghai | 时区 |
+| **DOH_ENABLED** | 0 | 设为 `1` 开启 DoH，需提前在 `certs/` 放好证书 |
+| **DOH_CERT** | /etc/mosdns/certs/fullchain.pem | DoH 证书路径（容器内） |
+| **DOH_KEY** | /etc/mosdns/certs/privkey.pem | DoH 密钥路径（容器内） |
+| **ROS_HOST** | 空 | RouterOS REST API 地址，用于将 AI IP 同步到路由器地址列表 |
+| **ROS_USER** | admin | RouterOS 用户名 |
+| **ROS_PASS** | 空 | RouterOS 密码 |
+| **AI_LIST_URL** | GitHub rules/ai-list.txt | AI 域名列表远端地址，每 2 分钟自动检查更新 |
+| **RELOAD_ON_AI_LIST_CHANGE** | 1 | 当远端 AI 列表变更时，立即重载 MosDNS 让新规则生效 |
+| **CONTAINER_DNS** | 空 | **RouterOS 容器必须设置**（如 8.8.8.8） |
+| **DOWNLOAD_DNS** | 同 DNS_GLOBAL | 容器内部下载/更新规则时临时使用的 DNS |
+| **RULE_FILE_MAX_AGE** | 82800 (23小时) | 规则文件过期时间（秒），设为 `0` 则每次强制下载 |
+| **RELOAD_DELAY** | 0 | 每日 04:30 规则重载前的延迟秒数，用于多站点错开时间 |
 
-| 变量            | 默认值                                    | 说明                                                  |
-| ------------- | -------------------------------------- | --------------------------------------------------- |
-| DNS_CN        | 119.29.29.29,223.5.5.5,114.114.114.114 | 国内域名用的上游 DNS，逗号分隔                                   |
-| DNS_GLOBAL    | 1.1.1.1,8.8.8.8,9.9.9.9                | 国际域名用的上游 DNS                                        |
-| DNS_AI        | 同 DNS_GLOBAL                           | AI 域名用的上游 DNS（如需走特定出口）                              |
-| TZ            | Asia/Shanghai                          | 时区                                                  |
-| DOH_ENABLED   | 0                                      | 设为 1 开启 DoH，需要在 certs/ 放证书                          |
-| DOH_CERT      | /etc/mosdns/certs/fullchain.pem        | DoH 证书路径（容器内）                                       |
-| DOH_KEY       | /etc/mosdns/certs/privkey.pem          | DoH 密钥路径（容器内）                                       |
-| ROS_HOST      | 空                                      | RouterOS SSH 地址（如 192.168.8.254:6220），用于同步 AI IP 列表 |
-| ROS_USER      | admin                                   | RouterOS 用户名                                        |
-| ROS_PASS      | 空                                      | RouterOS 密码                                         |
-| AI_LIST_URL   | GitHub rules/ai-list.txt                | AI 域名列表远端地址，`sync-ai.sh` 每 2 分钟自动拉取                     |
-| RELOAD_ON_AI_LIST_CHANGE | 1                           | 当远端 AI 列表变更时，自动触发 mosdns 重载让分流规则立即生效              |
-| CONTAINER_DNS | 空                                      | **仅 RouterOS 容器需要**，设为 8.8.8.8                      |
-| DOWNLOAD_DNS  | 空 (默认跟随 DNS_GLOBAL)                    | 容器内部下载规则时临时覆盖的 DNS，不修改对外服务                     |
-| RULE_FILE_MAX_AGE | 82800 (23小时)                       | 规则文件过期秒数，0 为每次强制下载                            |
-| RELOAD_DELAY  | 0                                      | 每日规则更新前的延迟秒数，多站点可以错开                                |
-| RELOAD_DELAY  | 0                                      | 每日规则更新前的延迟秒数，多站点可以错开                                |
+## 运行逻辑说明
 
-
-## 日常维护
-
-- **规则自动更新**：容器每天凌晨 04:30 自动拉取基础规则并重载，不需要手动操作
-- **AI 列表外加载**：`sync-ai.sh` 每 2 分钟拉取 `AI_LIST_URL`（默认仓库 `rules/ai-list.txt`），无需重建镜像
-- **AI 分流自动生效**：远端 `ai-list` 变更后自动触发 mosdns 重载，并同步 AI IP 到 RouterOS address-list
-- **更新镜像**：Docker Compose 执行 `docker compose pull && docker compose up -d`；RouterOS 需要先停止删除旧容器，再重新创建
+*   **规则自动更新**：容器每天 04:30 触发基础规则重载，超过 `RULE_FILE_MAX_AGE` 的文件会自动联网更新。
+*   **AI 列表同步**：脚本每 2 分钟检查 `AI_LIST_URL`，如有变化会自动重载 MosDNS 且无需重启容器。
+*   **本地挂载保护**：容器启动时，仅当 `/etc/mosdns/rules` 目录下缺失规则文件时，才会从镜像内置模板自动补齐。已存在的自定义文件不会被覆盖。
+*   **更新镜像**：Compose 执行 `docker compose pull && docker compose up -d`；ROS 则需停止旧容器并重新创建。
 
 ## 常见问题
 
-**拉取镜像失败，报 SSL 证书错误**
-→ 执行 `/certificate/settings/set builtin-trust-anchors=trusted`
+**1. 容器内下载规则文件报错（如 Connection refused 或 timeout）**
+→ 容器内部 DNS 无法解析 GitHub。请设置环境变量 `DOWNLOAD_DNS=8.8.8.8`，脚本会在下载时自动切换该 DNS。
 
-**容器启动了但所有查询都返回 SERVFAIL**
-→ 大概率是 DNS 劫持规则没有排除 mosdns IP，见上方第 7 步
+**2. 容器启动后所有查询返回 SERVFAIL**
+→ 路由器开启了 DNS 劫持但没有排除 MosDNS IP，形成死循环。请参考上方第 7 步修复劫持规则。
 
-**容器内下载规则文件失败**
-→ RouterOS 容器启动后网络需要约 1-3 分钟才能通，entrypoint 会自动等待。镜像里也预下载了规则，首次启动不影响使用
+**3. 拉取镜像失败 / SSL 错误**
+→ 执行 `/certificate/settings/set builtin-trust-anchors=trusted` 并重启设备。
 
-**mounts 参数报错**
-→ RouterOS 7.20 的 mounts 用 `name=` 不是 `list=`；如果 `mountlists` 参数不支持，直接把文件放到容器的 `root-dir` 对应路径下
+**4. 在 ROS 中使用 `mounts` 报错**
+→ RouterOS 7.20 版本的 mounts 语法应使用 `name=`。如果不兼容，可直接将规则文件复制到容器的 `root-dir` 对应目录下。
