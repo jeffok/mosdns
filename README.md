@@ -1,138 +1,107 @@
-# MosDNS 智能分流 DNS
+# MosDNS 智能分流 DNS 服务
 
 基于 [mosdns](https://github.com/IrineSistiana/mosdns) 的国内/国际/AI 三路分流 DNS 服务。
 镜像地址：[jeffok/mosdns](https://hub.docker.com/r/jeffok/mosdns)
 
-所有站点共用同一个镜像，不同站点的差异通过 `.env` 环境变量配置。
+本项目旨在提供一个开箱即用的 DNS 容器，所有差异均通过 `.env` 环境变量管理，适用于 **Docker Compose**、**Linux**、**NAS** 以及 **RouterOS 容器**。
 
-## Docker Compose 部署
+## 快速开始
 
-适用于 Linux 主机或 NAS。
+### 1. 准备目录
+
+创建配置文件存储目录，例如 `mosdns/`：
 
 ```bash
-mkdir -p mosdns/certs mosdns/rules && cd mosdns
+mkdir -p mosdns && cd mosdns
+```
 
-# 将 docker-compose.yml 和 .env.example 放入目录，然后：
+### 2. 准备配置文件
+
+下载 `docker-compose.yml` 和 `.env.example`：
+
+```bash
 cp .env.example .env
-vi .env                # 按需修改 DNS 上游等参数
-
-docker compose pull && docker compose up -d
-
-# 测试
-dig @127.0.0.1 baidu.com    # 应走国内 DNS
-dig @127.0.0.1 google.com   # 应走国际 DNS
+vi .env  # 根据实际情况修改
 ```
 
-**关于规则文件（`rules/` 目录）：**
-容器首次启动时会自动下载初始化的规则文件。如果你想在宿主机上管理（例如 `ai-list.txt`），可以在 `docker-compose.yml` 中挂载 `./rules:/etc/mosdns/rules`。容器会优先读取你挂载的文件，且不会被镜像内置文件覆盖。
+### 3. 启动服务
 
-如果需要 DoH，在 `certs/` 目录放入证书文件，并在 `.env` 中设置 `DOH_ENABLED=1`。
+使用 Docker Compose 启动容器：
 
-## RouterOS Container 部署
-
-适用于 MikroTik RouterOS 7.x 设备。
-
-**1. 开启容器功能（只需一次，执行后重启路由器）：**
-
-```routeros
-/system/device-mode/update container=yes
-/certificate/settings/set builtin-trust-anchors=trusted
-/container/config/set registry-url=https://registry-1.docker.io tmpdir=disk1/tmp
+```bash
+docker compose up -d
 ```
 
-**2. 创建虚拟网卡并加入网桥：**
+> **注意**：启动过程中，容器会自动下载初始规则文件。首次启动可能需要 1-3 分钟。
 
-```routeros
-/interface/veth/add name=veth-mosdns address=192.168.8.252/24 gateway=192.168.8.254
-/interface/bridge/port add bridge=br-lan interface=veth-mosdns
-```
+## 核心功能
 
-> 将 IP 和网桥名 (`br-lan`) 替换为你实际的值。
+本项目实现了智能的路由分流，确保 DNS 查询速度最优化：
 
-**3. 设置环境变量：**
+1.  **国内域名直连**：识别 `direct-list.txt` 中的域名，直接转发至 `DNS_CN`（国内公共 DNS）。
+2.  **国际/AI 域名代理**：识别 `proxy-list.txt`、`gfw.txt` 或 AI 域名列表，转发至 `DNS_GLOBAL` 或 `DNS_AI`。
+3.  **缓存优化**：内置 Lazy-Cache (惰性缓存)，即使上游失效，也能保证已解析的域名在一定时间内可用。
+4.  **ECS 支持**：支持通过环境变量 `ECS_PRESET` 指定虚拟子网，优化 CDN 解析。
 
-```routeros
-/container envs add list=ENV_MOSDNS key=DNS_CN value=119.29.29.29,223.5.5.5
-/container envs add list=ENV_MOSDNS key=DNS_GLOBAL value=1.1.1.1,8.8.8.8
-/container envs add list=ENV_MOSDNS key=TZ value=Asia/Shanghai
-/container envs add list=ENV_MOSDNS key=CONTAINER_DNS value=8.8.8.8
-```
+## 配置说明 (环境变量)
 
-> `CONTAINER_DNS` 是 RouterOS 容器必须的，否则容器内部无法联网。
-> 其他可选变量见下方表格。
-
-**4. 创建并启动容器：**
-
-```routeros
-/container add remote-image=jeffok/mosdns:latest interface=veth-mosdns \
-  root-dir=disk1/images/mosdns envlist=ENV_MOSDNS name=mosdns \
-  start-on-boot=yes logging=yes
-/container start mosdns
-```
-
-**5. 将系统 DNS 指向 mosdns：**
-
-```routeros
-/ip dns set servers=192.168.8.252
-```
-
-**6.（可选）看门狗 — 容器崩溃自动重启：**
-
-```routeros
-/system script add name=mosdns-watchdog source={ /container start mosdns }
-/system scheduler add name=mosdns-watchdog interval=5m on-event=mosdns-watchdog
-```
-
-**7.（重要）排除 DNS 劫持：**
-
-如果你配置了 `dstnat redirect dst-port=53` 把所有 DNS 劫持到路由器，
-那 mosdns 的上游查询也会被劫持回来导致死循环。
-必须在 NAT 规则中把 mosdns IP 排除。
-
-```routeros
-/ip/firewall/nat/set [find comment~"force lan dns"] src-address=!192.168.8.252
-```
-
-## 环境变量
-
-复制 `.env.example` 为 `.env`，按需修改。
+复制 `.env.example` 为 `.env`，你可以根据网络环境自由组合以下参数。
 
 | 变量 | 默认值 | 说明 |
 | ------------- | ------------- | ------------- |
-| **DNS_CN** | 119.29.29.29,223.5.5.5,114.114.114.114 | 国内域名上游 DNS，逗号分隔 |
-| **DNS_GLOBAL** | 1.1.1.1,8.8.8.8,9.9.9.9 | 国际域名上游 DNS |
-| **DNS_AI** | 同 DNS_GLOBAL | AI 域名上游 DNS（如需分流到特定网络） |
-| **TZ** | Asia/Shanghai | 时区 |
-| **DOH_ENABLED** | 0 | 设为 `1` 开启 DoH，需提前在 `certs/` 放好证书 |
-| **DOH_CERT** | /etc/mosdns/certs/fullchain.pem | DoH 证书路径（容器内） |
-| **DOH_KEY** | /etc/mosdns/certs/privkey.pem | DoH 密钥路径（容器内） |
-| **ROS_HOST** | 空 | RouterOS REST API 地址，用于将 AI IP 同步到路由器地址列表 |
-| **ROS_USER** | admin | RouterOS 用户名 |
-| **ROS_PASS** | 空 | RouterOS 密码 |
-| **AI_LIST_URL** | GitHub rules/ai-list.txt | AI 域名列表远端地址，每 2 分钟自动检查更新 |
-| **RELOAD_ON_AI_LIST_CHANGE** | 1 | 当远端 AI 列表变更时，立即重载 MosDNS 让新规则生效 |
-| **CONTAINER_DNS** | 空 | **RouterOS 容器必须设置**（如 8.8.8.8） |
-| **DOWNLOAD_DNS** | 同 DNS_GLOBAL | 容器内部下载/更新规则时临时使用的 DNS |
-| **RULE_FILE_MAX_AGE** | 82800 (23小时) | 规则文件过期时间（秒），设为 `0` 则每次强制下载 |
-| **RELOAD_DELAY** | 0 | 每日 04:30 规则重载前的延迟秒数，用于多站点错开时间 |
+| **DNS_CN** | 119.29.29.29,223.5.5.5 | 国内域名上游，建议填写 ISP 提供的 DNS 或国内公共 DNS |
+| **DNS_GLOBAL** | 1.1.1.1,8.8.8.8 | 国际/代理域名上游，建议使用境外 DNS 服务 |
+| **DNS_AI** | 同 DNS_GLOBAL | AI 域名专用上游，如需走特定出口/专线时可单独指定 |
+| **TZ** | Asia/Shanghai | 系统时区 |
+| **ECS_PRESET** | 空 (不启用) | **优化 CDN 关键参数**：填入一个目标地区的公网 IP (如 `119.29.29.29`) |
 
-## 运行逻辑说明
+### ECS 使用示例
 
-*   **规则自动更新**：容器每天 04:30 触发基础规则重载，超过 `RULE_FILE_MAX_AGE` 的文件会自动联网更新。
-*   **AI 列表同步**：脚本每 2 分钟检查 `AI_LIST_URL`，如有变化会自动重载 MosDNS 且无需重启容器。
-*   **本地挂载保护**：容器启动时，仅当 `/etc/mosdns/rules` 目录下缺失规则文件时，才会从镜像内置模板自动补齐。已存在的自定义文件不会被覆盖。
-*   **更新镜像**：Compose 执行 `docker compose pull && docker compose up -d`；ROS 则需停止旧容器并重新创建。
+| 使用场景 | 推荐配置 | 效果 |
+| :--- | :--- | :--- |
+| **回国场景** (人在海外) | `ECS_PRESET=119.29.29.29` | 访问国内服务（B站/微博）解析到国内 CDN |
+| **出国场景** (人在国内) | `ECS_PRESET=1.1.1.1` | 访问国际服务（YouTube/Twitter）解析到海外 CDN |
+
+## 进阶功能选项
+
+### DoH (DNS over HTTPS)
+在 `certs/` 目录下放置证书文件，并开启：
+```env
+DOH_ENABLED=1
+```
+
+### RouterOS 同步 (ROS API)
+将解析到的 AI IP 自动同步回路由器防火墙规则：
+```env
+ROS_HOST=192.168.88.1
+ROS_PASS=mysecretpass
+```
+
+### 下载与缓存管理
+```env
+DOWNLOAD_DNS=8.8.8.8       # 强制指定容器内部下载规则的 DNS
+RULE_FILE_MAX_AGE=82800    # 规则更新间隔 (默认 23 小时)
+```
+
+## 部署注意事项
+
+**Linux / NAS 用户**
+如果你的主机开启了防火墙或 53 端口被占用，请确保释放 53 端口。如需挂载本地规则目录进行定制，可以添加 `- ./rules:/etc/mosdns/rules` 的 Volume 映射。
+
+**RouterOS (ROS) 用户**
+1. 必须设置 `CONTAINER_DNS`（如 `8.8.8.8`），否则容器内无法联网更新规则。
+2. 确保防火墙 NAT 规则排除了 MosDNS 容器的 IP，避免形成 DNS 解析死循环。
+3. `AI_LIST_URL` 的同步依赖于容器网络通畅，建议初次启动时耐心等待。
 
 ## 常见问题
 
-**1. 容器内下载规则文件报错（如 Connection refused 或 timeout）**
-→ 容器内部 DNS 无法解析 GitHub。请设置环境变量 `DOWNLOAD_DNS=8.8.8.8`，脚本会在下载时自动切换该 DNS。
+**1. 容器启动后日志显示下载失败 (Connection refused/timeout)**
+*   **原因**：容器内部的 DNS 无法解析 GitHub 地址。
+*   **解决**：在 `.env` 中配置 `DOWNLOAD_DNS=8.8.8.8`。
 
-**2. 容器启动后所有查询返回 SERVFAIL**
-→ 路由器开启了 DNS 劫持但没有排除 MosDNS IP，形成死循环。请参考上方第 7 步修复劫持规则。
+**2. 查询所有域名都返回失败 (SERVFAIL)**
+*   **原因**：上游查询被路由器 DNS 劫持规则捕获，导致回环。
+*   **解决**：在防火墙规则中，排除 MosDNS 容器 IP 的 53 端口流量。
 
-**3. 拉取镜像失败 / SSL 错误**
-→ 执行 `/certificate/settings/set builtin-trust-anchors=trusted` 并重启设备。
-
-**4. 在 ROS 中使用 `mounts` 报错**
-→ RouterOS 7.20 版本的 mounts 语法应使用 `name=`。如果不兼容，可直接将规则文件复制到容器的 `root-dir` 对应目录下。
+**3. 规则更新失败**
+*   **解决**：检查 `RULE_FILE_MAX_AGE` 设置，或者手动设置 `DOWNLOAD_DNS` 为可靠的 DNS。

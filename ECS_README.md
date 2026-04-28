@@ -1,33 +1,60 @@
-# mosdns ECS (EDNS Client Subnet) 配置说明
+# MosDNS ECS (EDNS Client Subnet) 通用配置文档
 
-## 概述
+## ECS 功能概述
 
-mosdns v5.3+ 支持 `ecs_handler` 插件，可向上游 DNS 发送 ECS 信息，帮助 CDN 返回更优节点。
+ECS (EDNS Client Subnet) 允许 DNS 客户端（即 mosdns）在向上游 DNS 服务器发送查询时，携带客户端的子网信息。
+通过 ECS，上游 CDN DNS 可以返回更靠近用户的 CNAME 或 IP 地址，从而达到加速效果。
 
-## 配置方式
+## 为什么需要 ECS？
 
-通过环境变量 `ECS_PRESET` 设置预设 IP（为空则不发送 ECS）：
+1.  **CDN 优选节点**：如果你的上游 DNS 在境外（如 8.8.8.8），而你在中国使用。如果不发送 ECS，CDN 可能会将你解析到境外的节点。
+2.  **虚拟位置**：你可以通过 ECS 指定一个“虚拟 IP”，让所有请求都仿佛来自于该 IP，从而强制 CDN 返回特定区域的节点（例如在海外访问国内服务）。
 
-| 节点 | 建议值 | 说明 |
-|------|--------|------|
-| hkcloud | `119.29.29.29` | 中国 IP，出国/回国用户均需中国 CDN |
-| dxbhome | `5.62.61.0` | 阿联酋 IP，回国用户多为中东地区 |
+## mosdns 的实现
 
-## 启用步骤（hkcloud/dxbhome ROS 容器）
+本项目通过 `ecs_handler` 插件实现了智能 ECS 配置。你可以完全通过环境变量来控制 ECS 的行为。
 
-1. **修改前**：按计划文档执行 ROS DNS 检查与切换（避免 mosdns 故障导致断网）
-2. **添加环境变量**：
-   ```routeros
-   /container envs add list=ENV_MOSDNS key=ECS_PRESET value=119.29.29.29
+## 配置方法
+
+核心配置项是环境变量 `ECS_PRESET`。
+
+### 1. 关闭 ECS（默认）
+
+如果不设置，或者留空，mosdns **不会**向上游发送任何 ECS 信息。
+
+```env
+# ECS_PRESET=
+```
+
+### 2. 开启 ECS 并指定虚拟 IP（推荐）
+
+通过设置 `ECS_PRESET` 为一个合法的公网 IP（通常是目标地区的 IP），mosdns 会构造 ECS 请求。
+mosdns 会自动根据该 IP 判断正确的子网掩码（IPv4 通常为 24 位）。
+
+**示例场景：**
+
+| 你的位置 | 目的 | ECS_PRESET 推荐值 | 效果 |
+| :--- | :--- | :--- | :--- |
+| **海外/境外** | 优化国内 CDN 解析 | `119.29.29.29` (或任意中国 IP) | 上游 DNS 认为你在中国，返回国内 CDN IP |
+| **国内** | 优化海外 CDN 解析 | `8.8.8.8` (或任意美国 IP) | 上游 DNS 认为你在美国，返回境外 CDN IP |
+| **中东地区** | 优化中东区域解析 | `5.62.61.0` (阿联酋 IP) | 返回靠近中东的 CDN 节点 |
+
+**启用方式（在 `.env` 中配置）：**
+
+```env
+ECS_PRESET=119.29.29.29
+```
+
+## 验证 ECS 是否生效
+
+修改配置并重启容器后，你可以使用 `dig` 命令验证 ECS 功能是否正常工作。
+
+1. **查询特定域名（如 baidu.com）**：
+   ```bash
+   dig @127.0.0.1 baidu.com
    ```
-3. **重启 mosdns 容器**：
-   ```routeros
-   /container stop [find name~mosdns]
-   /container set [find name~mosdns] envlist=ENV_MOSDNS
-   /container start [find name~mosdns]
-   ```
-4. **验证**：恢复 ROS DNS 指向 mosdns，确认解析正常
+2. **检查返回结果**：
+   观察 ANSWER SECTION 中的 IP 是否靠近你 ECS 设置的地区。
 
-## 隐私说明
-
-启用 ECS 会向公共 DNS 上游（如 1.1.1.1、8.8.8.8）发送客户端子网信息，涉及隐私。若使用 preset，则发送的是预设 IP 而非真实客户端 IP。
+> **隐私说明**：
+> 设置 `ECS_PRESET` 使用的是“公共 IP”，而不是你自己的私有局域网 IP，因此不会暴露你的真实地理位置隐私，同时也满足了上游 DNS 的 ECS 格式要求。
