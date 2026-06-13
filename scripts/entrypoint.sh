@@ -6,12 +6,13 @@ mkdir -p "$RULES"
 log() { echo "[entrypoint] $*"; }
 
 # 规则下载源（名称|URL1|URL2|... 多源按序尝试）
+# 统一从 ASN-China release-files 分支拉取，自动使用国内镜像备用
 RULE_SOURCES="
-direct-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt
-china_ip_list.txt|https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/geoip/refs/heads/release/text/cn.txt
-apple-cn.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt
-proxy-list.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt
-geosite-gfw.txt|https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt
+direct-list.txt|https://raw.githubusercontent.com/jeffok/ASN-China/release-files/cn-domains.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/cn-domains.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/cn-domains.txt
+china_ip_list.txt|https://raw.githubusercontent.com/jeffok/ASN-China/release-files/IPv4.China.list|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/IPv4.China.list|https://mirror.ghproxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/IPv4.China.list
+apple-cn.txt|https://raw.githubusercontent.com/jeffok/ASN-China/release-files/apple-cn.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/apple-cn.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/apple-cn.txt
+proxy-list.txt|https://raw.githubusercontent.com/jeffok/ASN-China/release-files/proxy-domains.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/proxy-domains.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/proxy-domains.txt
+geosite-gfw.txt|https://raw.githubusercontent.com/jeffok/ASN-China/release-files/gfw-domains.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/gfw-domains.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/gfw-domains.txt
 "
 
 # ROS 容器不会自动注入 DNS，必须使用可靠的公共 DNS 以保证规则下载成功
