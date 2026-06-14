@@ -20,24 +20,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        run: |
+          docker buildx create --name mybuilder --use --driver docker-container \
+            --driver-opt network=host
+          docker buildx inspect --bootstrap
+
       - name: Login to Harbor
         run: |
           echo "${{ secrets.HARBOR_PASSWORD }}" | docker login ${{ env.REGISTRY }} -u ${{ secrets.HARBOR_USERNAME }} --password-stdin
 
-      - name: Set tags
-        id: tags
+      - name: Build and push
         run: |
           REPO="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          echo "repo=${REPO}" >> $GITHUB_OUTPUT
-          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-
-      - name: Build and push
-        run: |
-          docker build \
+          docker buildx build \
             --build-arg CACHEBUST=${{ github.run_id }} \
-            -t ${{ steps.tags.outputs.repo }}:latest \
-            -t ${{ steps.tags.outputs.repo }}:${{ steps.tags.outputs.short_sha }} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            -t ${REPO}:latest \
+            -t ${REPO}:${SHORT_SHA} \
+            --push \
             .
-          docker push ${{ steps.tags.outputs.repo }}:latest
-          docker push ${{ steps.tags.outputs.repo }}:${{ steps.tags.outputs.short_sha }}
+          # 轮换缓存目录，避免无限增长
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
