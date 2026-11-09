@@ -12,6 +12,9 @@ dom=${1:-}
 qtype=${2:-A}
 [ -n "$dom" ] || { echo "用法: explain.sh <域名> [A|AAAA|TXT]"; exit 2; }
 id=$(echo "$dom" | tr 'A-Z' 'a-z' | sed 's/\.$//')
+case "$PORT" in
+  ''|*[!0-9]*) PORT=53 ;;
+esac
 
 # 域名是否命中某域名名单（后缀匹配，与 mosdns domain_set 语义一致）
 hit() {
@@ -64,9 +67,22 @@ if [ "$qtype" = "AAAA" ] && [ "${ENABLE_IPV6:-0}" != 1 ]; then
 fi
 
 echo "实际应答:"
-out=$(nslookup -type="$qtype" -timeout=3 "$id" "$DNS" 2>/dev/null | awk '/^Name:/{f=1;next} f && /^Address/{print $2}')
-[ -z "$out" ] && out="（无应答）"
-echo "$out" | sed 's/^/  /'
+out=""
+queried=1
+if command -v dig >/dev/null 2>&1; then
+  out=$(dig @"$DNS" -p "$PORT" +time=3 +tries=1 +short "$id" "$qtype" 2>/dev/null || true)
+elif [ "$PORT" = 53 ]; then
+  out=$(nslookup -type="$qtype" -timeout=3 "$id" "$DNS" 2>/dev/null | awk '/^Name:/{f=1;next} f && /^Address/{print $2}')
+else
+  echo "  （跳过查询：DNS_ENTRY_PORT=$PORT，当前环境没有 dig；busybox nslookup 不支持指定端口。请安装 bind-tools 或把 DNS_ENTRY_PORT 设为 53。）"
+  queried=0
+fi
+if [ "$queried" = 1 ]; then
+  [ -n "$out" ] || out="（无应答）"
+  echo "$out" | sed 's/^/  /'
+else
+  out="（无应答）"
+fi
 
 # 对 A 记录做归属判断（CN / 私网 / 其它 → 预期出口）
 if [ "$qtype" = "A" ]; then
