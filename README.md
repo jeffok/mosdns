@@ -136,6 +136,7 @@ docker exec mosdns /opt/mosdns/rollback.sh --lkg
 ```
 
 - **外置存储**：官方不建议把容器 `root-dir` / mounts 放在内置 flash。RB5009 内置约 1GB NAND，再叠加 RouterOS 本体后空间紧；`remote-image` 解包还要占用大量内存。请把镜像、tmpdir、rules、data 放到 USB/NVMe（下例用 `usb1`）。
+  - **szhome（RB5009，`/disk print` 为空，无外置盘）**：把 `usb1/` 全部换成内置 flash 目录（如 `mosdns/`），并在部署前确认 `/system resource print` 的 `free-hdd-space`（实测约 957MiB 空闲，镜像约 46MB，够用）；容器只写 `data/` 与规则文件，写入量很小。
 - **内存**：镜像约数十 MB，本仓库实测 RSS 约 37MB。1GB RAM 够跑，但仍建议限制容器内存，并避免与其它重容器争用。
 
 ### 网络：veth、bridge、地址
@@ -174,7 +175,7 @@ add chain=forward action=accept src-address=192.168.88.0/24 dst-address=172.17.0
 add list=ENV_MOSDNS key=TZ value="Asia/Shanghai"
 add list=ENV_MOSDNS key=DNS_CN value="119.29.29.29,223.5.5.5,114.114.114.114"
 add list=ENV_MOSDNS key=DNS_GLOBAL value="8.8.8.8"
-add list=ENV_MOSDNS key=CONTAINER_DNS value="223.5.5.5"
+add list=ENV_MOSDNS key=CONTAINER_DNS value="119.29.29.29"
 add list=ENV_MOSDNS key=UNKNOWN_POLICY value="cn_first"
 add list=ENV_MOSDNS key=DNS_ENTRY_LISTEN value="0.0.0.0:53"
 ```
@@ -241,6 +242,16 @@ add list=MOUNT_MOSDNS_CERTS src=usb1/mosdns/certs dst=/etc/mosdns/certs
 ```
 
 若 LAN 客户端继续把路由器当 DNS，再设 `allow-remote-requests=yes`，并限制仅受信网段访问 UDP/TCP 53。也可把 DHCP 的 `dns-server` 直接设为 `172.17.0.2`。
+
+### 保留 address-list 分流（szhome 当前做法）
+
+若 RouterOS 里的 mangle 依赖 `gfw-proxy` 地址列表做策略路由（szhome 就是：`dst-address-list=gfw-proxy` → `rt-ovpn`），不要直接删掉带 `address-list` 的 FWD 静态记录：ROS 只在自己解析时才往地址列表里写 IP。把这些记录的 `forward-to` 从 `8.8.8.8` 改为容器地址，域名仍由 ROS 触发、解析交给 mosdns，`gfw-proxy` 照常填充：
+
+```
+/ip dns static set [find where type=FWD and forward-to=8.8.8.8] forward-to=172.17.0.2
+```
+
+同时把 `update-dns-static` 脚本里的 `proxyForwardTo` / `aiForwardTo` 改为 `172.17.0.2`，并把 `base` 指向仍在更新的 release-files（GitHub 或镜像），否则每天 04:30 会把它们改回 8.8.8.8。`DNS_GLOBAL` 出口（如 8.8.8.8）须自行走隧道路由。
 
 ### 回退
 
