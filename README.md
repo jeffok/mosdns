@@ -124,7 +124,7 @@ docker exec mosdns /opt/mosdns/rollback.sh --lkg
 
 ## 在 RouterOS 容器中部署
 
-> **通用步骤按官方文档整理；szhome 的实测流程见下方「szhome 实测流程」**（容器已于 2026-11-09 部署，并于同日 19:48 完成 ROS DNS 切换）。下列通用命令按 [RouterOS 7 Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)、[DNS](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS) 文档整理，目标机是 RB5009（ARM64，1GB RAM，1GB flash）。地址、接口名和 `usb1` 路径须按实机改。
+> **通用步骤按官方文档整理；szhome 的实测流程见下方「szhome 实测流程」**（容器已于 2026-11-09 部署，并于同日完成 ROS DNS 切换与按 IP 段分流）。下列通用命令按 [RouterOS 7 Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)、[DNS](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS) 文档整理，目标机是 RB5009（ARM64，1GB RAM，1GB flash）。地址、接口名和 `usb1` 路径须按实机改。
 
 ### 前提
 
@@ -292,33 +292,29 @@ scp mosdns-arm64.tar szhome-pub:
 - **CN 路由走 pppoe**：`Update_CN_Routes` 脚本导入 `cn_routes.rsc`（约 6190 条，`comment=CN`，gateway 设为 `pppoe-cn`），并启用 `daily_cn_routes`（每天 05:00，晚于 ASN-China 04:00 的构建）。默认路由仍是 pppoe 时这些路由不改变任何流量；只有把默认路由改到隧道后才起作用。
 - 内网固定解析：reg/gitea/gitlab 三条 A 记录已写入本仓库 `rules/custom-hosts.txt`，由容器每 120 秒从 Gitea 同步。该文件是 szhome 专用；其它站点共用前须先拆分。
 
-### szhome 切换记录与回退（2026-11-09）
+### szhome 当前分流方式：按 IP 段（2026-11-09 完成）
 
-已执行：
+DNS 全部由 mosdns 解析，RouterOS 只做转发和路由，不再按域名分流：
 
-- 6630 条 `FWD` 静态记录的 `forward-to` 由 `8.8.8.8` 改为 `192.168.88.222`；`/ip dns servers=192.168.88.222,119.29.29.29`（119 仅作容器故障时的备用）。
-- `update-dns-static` 脚本：`proxyForwardTo`、`aiForwardTo` 改为 `192.168.88.222`，数据源 `base` 改为 GitHub `release-files`（Gitea 上的已停更）。手动运行一次后，PROXY 记录 7345 条、AI 84 条，全部指向 `.222`，`gfw-proxy` 继续由 ROS 填充。
-- 注意：用脚本里的 `:resolve` 不指定服务器时不会写入地址列表，验证时要用 `:resolve 域名 server=192.168.88.254`（经 ROS DNS 服务）。
+- `/ip dns servers=192.168.88.222,119.29.29.29`（119 仅作容器故障时的备用）；ROS 上只保留 3 条内网 A 记录（reg/gitea/gitlab → `192.168.88.252`）作兜底，其余域名一律转发，**不再有 FWD 静态记录**，也不再有 `gfw-proxy` 地址列表、`update-dns-static` 脚本和对应 mangle 规则。
+- **国内 IP 走 pppoe**：`Update_CN_Routes` 导入约 6190 条 `comment=CN` 的路由（网关 `pppoe-cn`），`daily_cn_routes` 每天 11:30 更新（晚于 GitHub 定时构建的实际运行时间）。更新时脚本先下载、校验大小再替换，失败则保留旧路由。
+- **其余全部走隧道**：新增默认路由 `0.0.0.0/0 via ovpn-szof distance=1`；原 pppoe 默认路由（distance=2）保留作隧道故障时的退路。
+- 必须直连的地址保持显式路由：隧道端点 `183.56.180.152/32`、`cloud2.mikrotik.com` 的两个网段、`125.94.54.0/27` 走 pppoe；`8.8.8.8/32`、`1.1.1.1/32` 走隧道（供 `DNS_GLOBAL`）。
+- **入站回包保护**：默认路由改到隧道后，从公网进来的连接（dst-nat 的 NAS 端口、ROS 自身的 ssh/winbox）回包必须仍走 pppoe，否则来自境外的访问会因源地址不对而失败。为此新增路由表 `rt-wan`（默认 via `pppoe-cn`）和 3 条 mangle：入站 `pppoe-cn` 的新连接打 `cm-wan-in`，来自 LAN（dst-nat 回包）和路由器自身（output）的回包按该标记走 `rt-wan`。
+- **QUIC**：`forward` 里把「丢弃 udp/443」规则改为 `out-interface=ovpn-szof`，避免浏览器在 TCP 隧道上跑 QUIC。
+- 验证：国内站点直连（访问耗时几十毫秒，大文件约 43MB/s，不走隧道）；境外站点经隧道（单连接约 30 Mbit/s）。
 
-回退（ROS 上保留了切换前的导出文件 `dns-before-cutover-20261109.rsc`）：
+已知取舍：
 
-```
-/ip dns static set [find where type=FWD and forward-to=192.168.88.222] forward-to=8.8.8.8
-/ip dns set servers=119.29.29.29,114.114.114.114
-/ip dns cache flush
-```
+- 所有境外流量都经办公室出口；实测办公室到 szhome 方向单连接约 20 到 25 Mbit/s，szhome 到办公室约 52 Mbit/s，大流量下载会受限于此。
+- 隧道故障时流量自动退回 pppoe 直连，被墙站点会不通，国内不受影响。
+- 入站回包保护只在本机验证了「路由器自身回包」一条（互联网扫描器的 ICMP 已走 `rt-wan`）；来自境外的 dst-nat 访问需要境外客户端实测。
 
-脚本里的 `proxyForwardTo`、`aiForwardTo` 也要改回 `8.8.8.8`，否则下一次 04:30 会再次指向容器。
+回退（切换前的完整导出在 ROS 上：`full-before-ipsplit-20261109.rsc`、`dns-before-cutover-20261109.rsc`）：
 
-### 保留 address-list 分流（szhome 当前做法）
-
-若 RouterOS 里的 mangle 依赖 `gfw-proxy` 地址列表做策略路由（szhome 就是：`dst-address-list=gfw-proxy` → `rt-ovpn`），不要直接删掉带 `address-list` 的 FWD 静态记录：ROS 只在自己解析时才往地址列表里写 IP。把这些记录的 `forward-to` 从 `8.8.8.8` 改为容器地址，域名仍由 ROS 触发、解析交给 mosdns，`gfw-proxy` 照常填充：
-
-```
-/ip dns static set [find where type=FWD and forward-to=8.8.8.8] forward-to=172.17.0.2
-```
-
-同时把 `update-dns-static` 脚本里的 `proxyForwardTo` / `aiForwardTo` 改为 `172.17.0.2`，并把 `base` 指向仍在更新的 release-files（GitHub 或镜像），否则每天 04:30 会把它们改回 8.8.8.8。`DNS_GLOBAL` 出口（如 8.8.8.8）须自行走隧道路由。
+1. 删除默认路由 `via ovpn-szof distance=1`（注释 `default via szof OVPN`），流量回到 pppoe。
+2. 若还要恢复按域名分流：用 `full-before-ipsplit-20261109.rsc` 中的 FWD、地址列表、`update-dns-static` 脚本、mangle（`OVPN-proxy`）与 `rt-ovpn` 路由表恢复（FWD 的 `forward-to` 当时已是 `192.168.88.222`）。
+3. 仅回退 DNS：`/ip dns set servers=119.29.29.29,114.114.114.114`。
 
 ### 回退
 
