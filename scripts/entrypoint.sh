@@ -561,6 +561,23 @@ if [ "${ENABLE_ROS_SYNC:-0}" = 1 ]; then
 fi
 
 start_mosdns
+
+if [ "$ROS_SYNC_OK" = 1 ]; then
+  SYNC_AI_INTERVAL="${SYNC_AI_INTERVAL:-120}"
+  case "$SYNC_AI_INTERVAL" in
+    ''|*[!0-9]*) SYNC_AI_INTERVAL=120 ;;
+  esac
+  [ "$SYNC_AI_INTERVAL" -lt 1 ] && SYNC_AI_INTERVAL=120
+  (
+    while :; do
+      "$SCRIPT_DIR/sync-ai.sh" || warn "sync-ai 本轮失败，DNS 不受影响"
+      sleep "$SYNC_AI_INTERVAL"
+    done
+  ) &
+  ROS_SYNC_PID=$!
+  log "sync-ai 后台循环已启动 interval=${SYNC_AI_INTERVAL}s"
+fi
+
 sync_supervisor &
 SYNC_PID=$!
 

@@ -1,6 +1,6 @@
 # MosDNS
 
-MosDNS 为家庭或小型网络提供基于域名与规则集的 DNS 解析。容器使用 mosdns v5.3.4；路由分流由部署侧路由表负责，MosDNS 不维护 RouterOS 地址列表。镜像为 [`jeffok/mosdns`](https://hub.docker.com/r/jeffok/mosdns)。
+MosDNS 为家庭或小型网络提供基于域名与规则集的 DNS 解析。容器使用 mosdns v5.3.4；路由分流由部署侧路由表负责。默认不维护 RouterOS 地址列表；可选 `ENABLE_ROS_SYNC=1` 将 AI 域名解析结果写入 ROS `address-list`。镜像为 [`jeffok/mosdns`](https://hub.docker.com/r/jeffok/mosdns)。
 
 ## 架构
 
@@ -56,6 +56,56 @@ Compose 使用 host 网络，监听地址默认为 `0.0.0.0:53`。请确保主�
 | `DOH_ENABLED` / `DOH_CERT` / `DOH_KEY` / `DOH_LISTEN` | `0` / 默认证书路径 / 默认私钥路径 / `0.0.0.0:8443` | 可选 DoH 服务配置 |
 | `ENABLE_ROS_SYNC` | `0` | 默认关闭。关闭时无需填写 `ROS_HOST`/`ROS_USER`/`ROS_PASS`/`SYNC_AI_*`，不启动同步、不报错不告警。仅 `=1` 时才校验 `ROS_HOST` 与 `ROS_PASS`；缺则打一条错误并只禁用同步，DNS 照常 |
 | `TZ` | `Asia/Shanghai` | 容器本地时区；规则按本地时间每日 04:30 检查 |
+
+## AI 域名走特定出口（ENABLE_ROS_SYNC）
+
+把 `ai-domains.txt` 中域名解析出的 IPv4 写入 RouterOS address-list（默认 `ai-sgp`），再由 ROS mangle/路由把这些目的地址送到指定出口。默认关闭；关闭时 `ROS_HOST` / `ROS_USER` / `ROS_PASS` / `SYNC_AI_*` 全部留空即可，容器不会报错、不会告警、不会启动同步进程。只有 `ENABLE_ROS_SYNC=1` 时才校验 `ROS_HOST` 与 `ROS_PASS`：缺一则打一条错误日志并只禁用同步，MosDNS 仍正常提供 DNS。
+
+名单更新统一走 fetch/validate/apply；本同步只读 mosdns 正在使用的 `ai-domains.txt`，不再自行下载，也不会重载 mosdns。
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `ENABLE_ROS_SYNC` | `0` | `1` 时启动后台同步循环 |
+| `ROS_HOST` | 空 | RouterOS 地址，可带端口，如 `192.168.88.1` 或 `192.168.88.1:443` |
+| `ROS_USER` | `admin` | REST 用户 |
+| `ROS_PASS` | 空 | REST 密码；日志不会打印该值或 `Authorization` 头 |
+| `ROS_SCHEME` | `http` | `http` 或 `https` |
+| `ROS_TLS_INSECURE` | `0` | `https` 且设备为自签证书时设为 `1`（busybox wget `--no-check-certificate`） |
+| `ROS_AI_LIST` | `ai-sgp` | 写入的 address-list 名称 |
+| `ROS_AI_TTL` | `1800s` | 条目 timeout |
+| `ROS_AI_COMMENT` | `mosdns-ai` | 条目 comment，用于识别并替换本脚本写入的旧条目 |
+| `SYNC_AI_INTERVAL` | `120` 秒 | 同步间隔；循环失败不影响 DNS，容器停止时随之退出 |
+| `SYNC_AI_DNS` | 与 `CONTAINER_DNS` 相同 | 解析 AI 域名所用 DNS。建议设为 `127.0.0.1`，使 ROS 中的 IP 与客户端经 MosDNS 拿到的一致。默认镜像只有 busybox `nslookup`（53 端口）；若 `DNS_ENTRY_LISTEN` 不是 53，需写成 `127.0.0.1:端口` 且镜像内有 `dig`，否则无法按该端口解析 |
+
+### ROS 侧准备
+
+1. 启用 Web 服务并限制来源，例如只允许 MosDNS 主机访问：
+
+```
+/ip service set www address=192.168.88.0/24 disabled=no
+```
+
+若走 TLS：`/ip service set www-ssl ...`，并视证书情况设置容器 `ROS_SCHEME=https`、必要时 `ROS_TLS_INSECURE=1`。
+
+2. 建立仅有 firewall 写权限的用户组与用户（不要用满权 admin 长期跑同步）：
+
+```
+/user group add name=mosdns-sync policy=read,write,api,rest-api,!ftp,!reboot,!sensitive,!policy,!test,!password,!sniff,!romon
+/user add name=mosdns group=mosdns-sync password=<单独密码>
+```
+
+具体 policy 名称随 ROS 版本略有差异，以能够调用 `/rest/ip/firewall/address-list` 为准。
+
+3. 用 `dst-address-list=ai-sgp` 做 mangle / 路由，例如：
+
+```
+/ip firewall mangle add chain=prerouting dst-address-list=ai-sgp action=mark-routing new-routing-mark=via-sgp passthrough=no
+/ip route add routing-mark=via-sgp gateway=<新加坡出口网关>
+```
+
+### 工作方式与局限
+
+后台循环每 `SYNC_AI_INTERVAL` 秒：按 `comment`+`list` GET 旧条目 → 逐条 remove → 解析 `ai-domains.txt` → add 新条目。先删后加期间 address-list 会有短暂空窗，已建立的连接通常不受影响，新连接可能在空窗内走默认路由。
 
 ## 运维
 

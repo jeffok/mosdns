@@ -35,7 +35,7 @@ fi
 mkdir -p "$WORK/rules" "$WORK/state" "$WORK/host"
 cp "$ROOT"/tests/fixtures/* "$WORK/rules/"
 chmod -R 777 "$WORK"
-chmod +x "$ROOT/scripts"/*.sh "$ROOT/tests/mock_upstream.sh"
+chmod +x "$ROOT/scripts"/*.sh "$ROOT/tests/mock_upstream.sh" "$ROOT/tests/mock_ros.sh"
 if ! docker network create --subnet 172.31.240.0/24 "$NET" >/dev/null 2>&1; then
   ng C00 '无法创建 core 测试网络'; exit 1
 fi
@@ -44,6 +44,7 @@ CN_ADDR=172.31.240.2
 GL_ADDR=172.31.240.3
 AI_ADDR=172.31.240.4
 DEAD_ADDR=172.31.240.5
+ROS_ADDR=172.31.240.10
 
 start_mock() {
   name=$1; ip=$2; addr=$3
@@ -283,6 +284,103 @@ if start_sut "$WORK/env.r02"; then
   fi
 else
   ng R02 '被测实例未就绪'
+  docker logs "$P-sut" 2>&1 | tail -20
+fi
+
+start_ros() {
+  mkdir -p "$WORK/ros"
+  chmod 777 "$WORK/ros"
+  : > "$WORK/ros/http.log"
+  : > "$WORK/ros/added.log"
+  docker rm -fv "$P-ros" >/dev/null 2>&1 || true
+  docker run -d --name "$P-ros" --network "$NET" --ip "$ROS_ADDR" \
+    -v "$ROOT/tests:/opt/tests:ro" -v "$WORK/ros:/tmp/mock-ros" \
+    -e ROS_USER=admin -e ROS_PASS=testpass \
+    --entrypoint /opt/tests/mock_ros.sh "$IMAGE" 80 >/dev/null 2>&1
+}
+
+# --- R03: mock ROS 验证 GET 过滤、remove、add 请求体 ---
+if ! start_ros; then
+  ng R03 'mock ROS 启动失败'
+else
+  write_env "$WORK/env.r03"
+  cat >> "$WORK/env.r03" <<EOF
+ENABLE_ROS_SYNC=1
+ROS_HOST=$ROS_ADDR
+ROS_USER=admin
+ROS_PASS=testpass
+SYNC_AI_DNS=127.0.0.1
+SYNC_AI_INTERVAL=2
+ROS_AI_LIST=ai-sgp
+ROS_AI_TTL=1800s
+ROS_AI_COMMENT=mosdns-ai
+EOF
+  if start_sut "$WORK/env.r03"; then
+    i=0
+    while [ "$i" -lt 15 ]; do
+      grep -q 'add list=ai-sgp' "$WORK/ros/added.log" 2>/dev/null && break
+      sleep 1
+      i=$((i + 1))
+    done
+    got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | head -n 1)
+    logs=$(docker logs "$P-sut" 2>&1 || true)
+    http=$(cat "$WORK/ros/http.log" 2>/dev/null || true)
+    added=$(cat "$WORK/ros/added.log" 2>/dev/null || true)
+    has_get=0; printf '%s\n' "$http" | grep -Fq 'GET /rest/ip/firewall/address-list?list=ai-sgp&comment=mosdns-ai' && has_get=1
+    has_del=0; printf '%s\n' "$added" | grep -Fq 'remove *1' && has_del=1
+    has_add=0; printf '%s\n' "$added" | grep -Fq 'add list=ai-sgp address=198.51.100.1 timeout=1800s comment=mosdns-ai' && has_add=1
+    started=0; printf '%s\n' "$logs" | grep -Fq 'sync-ai 后台循环已启动 interval=2s' && started=1
+    if [ "$got" = 192.0.2.10 ] && [ "$has_get" = 1 ] && [ "$has_del" = 1 ] && [ "$has_add" = 1 ] && [ "$started" = 1 ]; then
+      ok R03 'mock ROS 上 GET 过滤、remove、add 请求体正确且 DNS 正常'
+    else
+      ng R03 "ROS 同步请求不符 get=$has_get del=$has_del add=$has_add started=$started answer=$got"
+      printf '%s\n' "$http" | tail -20
+      printf '%s\n' "$added"
+    fi
+    # --- R05: 成功路径日志无凭据 ---
+    b64=$(printf 'admin:testpass' | base64 | tr -d '\n')
+    if printf '%s\n' "$logs" | grep -Fq 'testpass' \
+      || printf '%s\n' "$logs" | grep -Fq "$b64" \
+      || printf '%s\n' "$logs" | grep -Fiq 'Authorization'; then
+      ng R05 '日志泄露了 ROS_PASS 或 Authorization'
+    else
+      ok R05 '日志未打印 ROS_PASS 或 Authorization'
+    fi
+  else
+    ng R03 '被测实例未就绪'
+    ng R05 '被测实例未就绪，跳过凭据日志检查'
+    docker logs "$P-sut" 2>&1 | tail -20
+  fi
+fi
+
+# --- R04: 凭据错误只告警，DNS 不受影响 ---
+write_env "$WORK/env.r04"
+cat >> "$WORK/env.r04" <<EOF
+ENABLE_ROS_SYNC=1
+ROS_HOST=$ROS_ADDR
+ROS_USER=admin
+ROS_PASS=wrongpass
+SYNC_AI_DNS=127.0.0.1
+SYNC_AI_INTERVAL=2
+EOF
+: > "$WORK/ros/added.log"
+: > "$WORK/ros/http.log"
+if start_sut "$WORK/env.r04"; then
+  sleep 3
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | head -n 1)
+  logs=$(docker logs "$P-sut" 2>&1 || true)
+  added=$(cat "$WORK/ros/added.log" 2>/dev/null || true)
+  warn_auth=0; printf '%s\n' "$logs" | grep -Fq 'RouterOS 认证失败' && warn_auth=1
+  leaked=0
+  printf '%s\n' "$logs" | grep -Fq 'wrongpass' && leaked=1
+  printf '%s\n' "$logs" | grep -Fiq 'Authorization' && leaked=1
+  if [ "$got" = 192.0.2.10 ] && [ "$warn_auth" = 1 ] && [ "$leaked" = 0 ] && ! printf '%s\n' "$added" | grep -q '^add '; then
+    ok R04 '凭据错误时只告警、不写 ROS、DNS 不受影响'
+  else
+    ng R04 "错误凭据行为不符 answer=$got warn=$warn_auth leaked=$leaked added=$(printf '%s' "$added" | tr '\n' ';')"
+  fi
+else
+  ng R04 '被测实例未就绪'
   docker logs "$P-sut" 2>&1 | tail -20
 fi
 
