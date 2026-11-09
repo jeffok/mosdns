@@ -46,3 +46,7 @@ fi
 echo
 echo "== 上次同步日志（末尾 10 行）"
 tail -n 10 "$STATE_DIR/sync.log" 2>/dev/null || echo "  无"
+
+echo
+echo "== 上次规则源尝试"
+cat "$STATE_DIR/fetch.log" 2>/dev/null || echo "  无"

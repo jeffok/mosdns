@@ -19,17 +19,26 @@ STAGING="${STAGING:-$STATE_DIR/staging}"
 PROBE_TIMEOUT="${RULES_PROBE_TIMEOUT:-5}"
 FETCH_TIMEOUT="${RULES_FETCH_TIMEOUT:-60}"
 DEFAULT_SOURCES="https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://gitea.jeffok.com:4443/jeff/asn-china/raw/branch/release-files"
-RULES_SOURCES="${RULES_SOURCES:-$DEFAULT_SOURCES}"
+RULES_SOURCES="${RULES_SOURCES-$DEFAULT_SOURCES}"
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 # 必需文件（缺失即该源作废）
-REQUIRED_FILES="cn-domains.txt IPv4.China.list gfw-domains.txt proxy-domains.txt"
+REQUIRED_FILES="cn-domains.txt IPv4.China.list gfw-domains.txt proxy-domains.txt ai-domains.txt"
 # 可选文件（线上可能还没发布：cn-exceptions.txt 尚不存在、apple-cn.txt 为空）
-OPTIONAL_FILES="apple-cn.txt cn-exceptions.txt bogus-nxdomain.china.conf ai-domains.txt"
+OPTIONAL_FILES="apple-cn.txt cn-exceptions.txt bogus-nxdomain.china.conf"
 ALL_FILES="$REQUIRED_FILES $OPTIONAL_FILES"
 PROBE_FILE="gfw-domains.txt"
 
-log() { echo "[$(date '+%H:%M:%S')] [fetch] $*"; }
-warn() { echo "[$(date '+%H:%M:%S')] [fetch] WARN $*" >&2; }
+log() {
+  line="[$(date '+%H:%M:%S')] [fetch] $*"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >> "$STATE_DIR/fetch.log"
+}
+warn() {
+  line="[$(date '+%H:%M:%S')] [fetch] WARN $*"
+  printf '%s\n' "$line" >&2
+  printf '%s\n' "$line" >> "$STATE_DIR/fetch.log"
+}
 
 strip_secret() { printf '%s' "$1" | sed -E 's#(://)[^/@]+@#\1***@#'; }
 
@@ -39,8 +48,10 @@ wget_common() {
 }
 
 is_optional() {
-  for f in $OPTIONAL_FILES; do [ "$f" = "$1" ] && return 0; done
-  return 1
+  case " $OPTIONAL_FILES " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # 计时（秒，两位小数）
@@ -63,6 +74,13 @@ write_resolv_for_fetch() {
 ordered_sources() {
   sticky=""
   [ -f "$STATE_DIR/last_source" ] && sticky=$(cat "$STATE_DIR/last_source")
+  # A removed source must never survive a configuration change via sticky state.
+  configured=$(printf '%s' "$RULES_SOURCES" | tr -d '[:space:]')
+  case ",$configured," in
+    *,"$sticky",*) ;;
+    *) sticky= ;;
+  esac
+
   if [ -n "$sticky" ]; then printf '%s\n' "$sticky"; fi
   echo "$RULES_SOURCES" | tr ',' '\n' | while read -r s; do
     s=$(echo "$s" | tr -d ' ')
@@ -153,19 +171,27 @@ fetch_all_from() {
   return 0
 }
 
+validate_staging() {
+  validator="$SCRIPT_DIR/validate.sh"
+  [ -x "$validator" ] || validator=/opt/mosdns/validate.sh
+  [ -x "$validator" ] || { warn "validate.sh is unavailable"; return 1; }
+  STATE_DIR="$STATE_DIR" LKG_DIR="${LKG_DIR:-$STATE_DIR/lkg}" "$validator" --dir "$STAGING"
+}
+
 main() {
   mkdir -p "$STATE_DIR"
   write_resolv_for_fetch
   if [ "${1:-}" = "--probe" ]; then do_probe; return 0; fi
+  : > "$STATE_DIR/fetch.log"
 
   for base in $(ordered_sources); do
     log "尝试源 $(strip_secret "$base")"
-    if probe_source "$base" >/dev/null && fetch_all_from "$base"; then
+    if probe_source "$base" >/dev/null && fetch_all_from "$base" && validate_staging; then
       echo "$base" > "$STATE_DIR/last_source"
       log "选用源 $(strip_secret "$base")"
       return 0
     fi
-    warn "源不可用：$(strip_secret "$base")"
+    warn "源不可用或校验失败：$(strip_secret "$base")"
   done
   warn "所有源都失败，保持 LKG"
   return 2
