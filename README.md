@@ -124,7 +124,7 @@ docker exec mosdns /opt/mosdns/rollback.sh --lkg
 
 ## 在 RouterOS 容器中部署
 
-> **通用步骤按官方文档整理；szhome 的实测流程见下方「szhome 实测流程」**（容器已于 2026-11-09 部署并验证解析与规则同步，尚未切换 ROS DNS）。下列通用命令按 [RouterOS 7 Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)、[DNS](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS) 文档整理，目标机是 RB5009（ARM64，1GB RAM，1GB flash）。地址、接口名和 `usb1` 路径须按实机改。
+> **通用步骤按官方文档整理；szhome 的实测流程见下方「szhome 实测流程」**（容器已于 2026-11-09 部署，并于同日 19:48 完成 ROS DNS 切换）。下列通用命令按 [RouterOS 7 Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)、[DNS](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS) 文档整理，目标机是 RB5009（ARM64，1GB RAM，1GB flash）。地址、接口名和 `usb1` 路径须按实机改。
 
 ### 前提
 
@@ -291,6 +291,24 @@ scp mosdns-arm64.tar szhome-pub:
 - 规则源可达性（从 ROS 出口实测，三个源都能下载 `gfw-domains.txt`）：gh-proxy 镜像、GitHub 直连、Gitea。
 - **CN 路由走 pppoe**：`Update_CN_Routes` 脚本导入 `cn_routes.rsc`（约 6190 条，`comment=CN`，gateway 设为 `pppoe-cn`），并启用 `daily_cn_routes`（每天 05:00，晚于 ASN-China 04:00 的构建）。默认路由仍是 pppoe 时这些路由不改变任何流量；只有把默认路由改到隧道后才起作用。
 - 内网固定解析：reg/gitea/gitlab 三条 A 记录已写入本仓库 `rules/custom-hosts.txt`，由容器每 120 秒从 Gitea 同步。该文件是 szhome 专用；其它站点共用前须先拆分。
+
+### szhome 切换记录与回退（2026-11-09）
+
+已执行：
+
+- 6630 条 `FWD` 静态记录的 `forward-to` 由 `8.8.8.8` 改为 `192.168.88.222`；`/ip dns servers=192.168.88.222,119.29.29.29`（119 仅作容器故障时的备用）。
+- `update-dns-static` 脚本：`proxyForwardTo`、`aiForwardTo` 改为 `192.168.88.222`，数据源 `base` 改为 GitHub `release-files`（Gitea 上的已停更）。手动运行一次后，PROXY 记录 7345 条、AI 84 条，全部指向 `.222`，`gfw-proxy` 继续由 ROS 填充。
+- 注意：用脚本里的 `:resolve` 不指定服务器时不会写入地址列表，验证时要用 `:resolve 域名 server=192.168.88.254`（经 ROS DNS 服务）。
+
+回退（ROS 上保留了切换前的导出文件 `dns-before-cutover-20261109.rsc`）：
+
+```
+/ip dns static set [find where type=FWD and forward-to=192.168.88.222] forward-to=8.8.8.8
+/ip dns set servers=119.29.29.29,114.114.114.114
+/ip dns cache flush
+```
+
+脚本里的 `proxyForwardTo`、`aiForwardTo` 也要改回 `8.8.8.8`，否则下一次 04:30 会再次指向容器。
 
 ### 保留 address-list 分流（szhome 当前做法）
 
