@@ -22,9 +22,12 @@ warn() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] [entrypoint] WARN $*" >&2; }
 mkdir -p "$RULES" "$STATE" "$(dirname "$CONFIG")"
 
 # ---------------------------------------------------------------- 容器内解析
-# 容器内解析用国内公共 DNS：gitea.jeffok.com 在 szhome 内网，8.8.8.8 会解析到
-# 缓存的旧地址导致同步失败（2026-11-09 实测）；CONTAINER_DNS 可显式覆盖。
-CONTAINER_DNS="${CONTAINER_DNS:-223.5.5.5}"
+# 默认 DNSPod 公共 DNS。jeffok.com 按线路解析，不同解析器结果不同属正常。
+# 显式设为空字符串时同样回退默认值，不报错。
+# szhome 访问内网 Gitea 请用 FETCH_RESOLVE=gitea.jeffok.com:4443:192.168.88.252。
+CONTAINER_DNS="${CONTAINER_DNS:-119.29.29.29}"
+CONTAINER_DNS=$(printf '%s' "$CONTAINER_DNS" | tr -d '[:space:]')
+[ -n "$CONTAINER_DNS" ] || CONTAINER_DNS=119.29.29.29
 echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
 log "resolv.conf -> $CONTAINER_DNS"
 
@@ -119,6 +122,18 @@ count_dns() {
   echo "$n"
 }
 
+# mosdns forward 的 concurrent 上限 3（maxConcurrentQueries=3）。
+# 默认等于上游个数，显式值也夹到 1..3。上游个数本身不限。
+clamp_concurrent() {
+  n=$1
+  case "$n" in
+    ''|*[!0-9]*) n=1 ;;
+  esac
+  [ "$n" -lt 1 ] && n=1
+  [ "$n" -gt 3 ] && n=3
+  echo "$n"
+}
+
 render_config() {
   [ -f "$SCRIPT_DIR/config.template.yaml" ] && TEMPLATE="$SCRIPT_DIR/config.template.yaml" || TEMPLATE=/opt/mosdns/config.template.yaml
   [ -f "$TEMPLATE" ] || { warn "config template not found: $TEMPLATE"; return 1; }
@@ -128,9 +143,9 @@ render_config() {
   DNS_GLOBAL="${DNS_GLOBAL:-8.8.8.8}"
   DNS_AI="${DNS_AI:-$DNS_GLOBAL}"
   ECS_PRESET="${ECS_PRESET:-}"
-  CONCURRENT_CN="${CONCURRENT_CN:-$(count_dns "$DNS_CN")}"
-  CONCURRENT_GLOBAL="${CONCURRENT_GLOBAL:-$(count_dns "$DNS_GLOBAL")}"
-  CONCURRENT_AI="${CONCURRENT_AI:-$(count_dns "$DNS_AI")}"
+  CONCURRENT_CN=$(clamp_concurrent "${CONCURRENT_CN:-$(count_dns "$DNS_CN")}")
+  CONCURRENT_GLOBAL=$(clamp_concurrent "${CONCURRENT_GLOBAL:-$(count_dns "$DNS_GLOBAL")}")
+  CONCURRENT_AI=$(clamp_concurrent "${CONCURRENT_AI:-$(count_dns "$DNS_AI")}")
 
   case "${UNKNOWN_POLICY:-cn_first}" in
     cn_first)     FALLBACK_PRIMARY=query_cn_first;    FALLBACK_SECONDARY=global_sequence ;;
@@ -509,6 +524,7 @@ sync_supervisor() {
 shutdown() {
   log "shutdown signal received"
   [ -n "${SYNC_PID:-}" ] && kill "$SYNC_PID" 2>/dev/null || true
+  [ -n "${ROS_SYNC_PID:-}" ] && kill "$ROS_SYNC_PID" 2>/dev/null || true
   stop_mosdns
   exit 0
 }
@@ -532,17 +548,36 @@ if ! check_config_files; then
   warn "some rule files still missing after init; mosdns may fail to start"
 fi
 
-# crond 只服务于旧版 sync-ai，且必须显式启用（D2）
+# ENABLE_ROS_SYNC 默认 0：不校验 ROS_*、不告警、不启动任何同步进程。
+# 仅 =1 时才校验 ROS_HOST / ROS_PASS；缺一则打一条错误并只禁用同步，mosdns 照常提供 DNS。
+ROS_SYNC_PID=""
+ROS_SYNC_OK=0
 if [ "${ENABLE_ROS_SYNC:-0}" = 1 ]; then
-  {
-    printf "CONTAINER_DNS=%s\n" "$CONTAINER_DNS"
-    printf "*/2 * * * * /sync-ai.sh >/dev/null 2>&1\n"
-  } | crontab -
-  crond -b -l 2
-  log "crond started for deprecated sync-ai (ENABLE_ROS_SYNC=1)"
+  if [ -z "${ROS_HOST:-}" ] || [ -z "${ROS_PASS:-}" ]; then
+    log "ERROR ENABLE_ROS_SYNC=1 但缺少 ROS_HOST 或 ROS_PASS，已禁用 AI 地址列表同步；DNS 服务不受影响"
+  else
+    ROS_SYNC_OK=1
+  fi
 fi
 
 start_mosdns
+
+if [ "$ROS_SYNC_OK" = 1 ]; then
+  SYNC_AI_INTERVAL="${SYNC_AI_INTERVAL:-120}"
+  case "$SYNC_AI_INTERVAL" in
+    ''|*[!0-9]*) SYNC_AI_INTERVAL=120 ;;
+  esac
+  [ "$SYNC_AI_INTERVAL" -lt 1 ] && SYNC_AI_INTERVAL=120
+  (
+    while :; do
+      "$SCRIPT_DIR/sync-ai.sh" || warn "sync-ai 本轮失败，DNS 不受影响"
+      sleep "$SYNC_AI_INTERVAL"
+    done
+  ) &
+  ROS_SYNC_PID=$!
+  log "sync-ai 后台循环已启动 interval=${SYNC_AI_INTERVAL}s"
+fi
+
 sync_supervisor &
 SYNC_PID=$!
 

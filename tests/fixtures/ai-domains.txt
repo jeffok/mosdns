@@ -1,2 +1,3 @@
 # AI 硬名单
 ai.test
+ai-gfw.test
