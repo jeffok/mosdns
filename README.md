@@ -1,130 +1,62 @@
-# MosDNS 智能分流 DNS 服务
+# MosDNS
 
-基于 [mosdns](https://github.com/IrineSistiana/mosdns) 的国内/国际/AI 三路分流 DNS 服务。
-镜像地址：[jeffok/mosdns](https://hub.docker.com/r/jeffok/mosdns)
+MosDNS 为家庭或小型网络提供基于域名与规则集的 DNS 解析。容器使用 mosdns v5.3.4；路由分流由部署侧路由表负责，MosDNS 不维护 RouterOS 地址列表。镜像为 [`jeffok/mosdns`](https://hub.docker.com/r/jeffok/mosdns)。
 
-本项目旨在提供一个开箱即用的 DNS 容器，所有差异均通过 `.env` 环境变量管理，适用于 **Docker Compose**、**Linux**、**NAS** 以及 **RouterOS 容器**。
+## 架构
 
-## 核心场景
+客户端 DNS 请求进入 MosDNS 后，按顺序检查固定 hosts 与缓存，再根据 CN 例外、硬名单、软名单和 CN 规则选择国内或全局上游。未知域名默认使用 `UNKNOWN_POLICY=cn_first`：优先国内解析，接受 CN、RFC1918 与 CGNAT 地址；不接受的结果回退到全局上游。已知 bogus 地址会被丢弃。AAAA 默认返回空结果，可通过 `ENABLE_IPV6` 开启。
 
-| 场景 | 说明 | 效果 |
-| :--- | :--- | :--- |
-| **日常分流** | 国内直连，代理走国际通道 | 提升国内解析速度，海外走代理 |
-| **AI 专属分流** | 识别 GPT、Gemini、Claude 等 | **强制走 SGP 节点**，确保在受限地区可用 |
-| **CDN 优化 (ECS)** | 开启 ECS 虚拟 IP | 根据 ECS 返回的 IP 获取更优的节点 |
+容器先从镜像规则或 LKG 启动服务，再由后台同步脚本更新规则。规则更新会校验内容、金丝雀启动并在变更后重启 MosDNS；失败时保留当前可用规则。`custom-hosts.txt` 定期从配置的主 URL 拉取，源不可用时保留当前版本。同步状态与历史版本保存在 `/data/state`。
 
-## 规则更新机制
+## 部署
 
-为了保持解析的精准度，本项目采用**动静结合**的规则更新策略：
+复制 `docker-compose.yml` 和 `.env.example` 到部署目录，创建 `.env`，然后运行：
 
-1. **基础公共规则（静态内置）**：包含 direct-list、gfw-list 等 6 个核心文件。GitHub Actions 会在**每周一 04:00 (UTC+8)** 自动触发构建，下载最新的规则并推送至 Docker Hub (`latest` 标签)。你只需要定期 `pull` 即可。
-2. **AI 规则列表（动态同步）**：容器内置 `sync-ai.sh`，**每 2 分钟**在后台自动从 GitHub (或自定义 API) 拉取最新 `ai-list`。列表变更后会立即重载 MosDNS，实现秒级生效，**无需重启容器**。
-3. **本地定制（挂载保护）**：支持将 `rules/` 目录映射到宿主机。容器启动时会优先读取你挂载的文件，且不会被内置规则覆盖。
-
-## 快速部署
-
-### 1. Docker Compose (Linux / NAS)
-创建目录并放置 `docker-compose.yml` 和 `.env`：
-```bash
-mkdir -p mosdns && cd mosdns
-# 放置 docker-compose.yml 和 .env 后运行：
+```sh
+mkdir -p rules data certs
 docker compose up -d
 ```
 
-### 2. RouterOS 容器
-ROS 容器中运行 MosDNS，需要将虚拟网卡加入网桥并配置环境变量（见下文详细配置）。
+Compose 使用 host 网络，监听地址默认为 `0.0.0.0:53`。请确保主机 53 端口可用，并按网络环境允许容器访问配置的上游 DNS。
 
----
+## 环境变量
 
-## 完整环境变量
+完整示例见 [.env.example](.env.example)。主要变量如下；空值表示使用脚本内的默认值。
 
-复制 `.env.example` 为 `.env`，按需修改。
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `DNS_CN` | `119.29.29.29,223.5.5.5,114.114.114.114` | 国内解析上游，逗号分隔 |
+| `DNS_GLOBAL` | `8.8.8.8` | 全局上游；szhome 当前配置由隧道承载。`1.1.1.1` 尚未纳入 |
+| `DNS_AI` | 与 `DNS_GLOBAL` 相同 | 可选 AI 专用上游 |
+| `UNKNOWN_POLICY` | `cn_first` | 未知域名策略：`cn_first` 或 `global_first` |
+| `ECS_PRESET` | 空 | 可选 ECS 预设地址；默认不发送 ECS |
+| `ENABLE_IPV6` | `0` | 开启后保留 AAAA 查询处理 |
+| `CONTAINER_DNS` | `223.5.5.5` | 容器自身下载所用 DNS；szhome 使用此地址 |
+| `FETCH_RESOLVE` | `gitea.jeffok.com:4443:192.168.88.252` | 可选固定下载源解析，格式为 `host:port:ip` |
+| `RULES_SOURCES` | `.env.example` 中的有序列表 | ASN-China 规则源；同一轮更新使用单一来源 |
+| `CUSTOM_HOSTS_SOURCES` | szhome Gitea `custom-hosts.txt` URL | 固定解析文件的主源；可改为自有主源 URL |
+| `CUSTOM_HOSTS_AUTH` | 空 | 可选 HTTP Authorization 请求头值 |
+| `RULES_UPDATE_INTERVAL` | `86400` 秒 | 规则更新间隔 |
+| `CUSTOM_HOSTS_INTERVAL` | `120` 秒 | 固定解析文件检查间隔 |
+| `RULES_PROBE_TIMEOUT` / `RULES_FETCH_TIMEOUT` | `5` / `60` 秒 | 探测与下载超时 |
+| `MIN_CN`, `MIN_PROXY`, `MIN_GFW`, `MIN_AI`, `MIN_IP`, `MIN_BOGUS` | `80000`, `15000`, `3000`, `20`, `4000`, `100` | 各规则有效条目数下限 |
+| `CN_EXCEPTIONS_MIN` / `APPLE_CN_MIN` | `0` / `0` | 可选规则文件下限；默认允许暂未发布的数据为空 |
+| `REL_FLOOR_PCT` | `80` | 与上一有效版本相比允许的最低比例 |
+| `CACHE_SIZE` / `LAZY_CACHE_TTL` | `10240` / `120` 秒 | 缓存容量与惰性缓存 TTL |
+| `CACHE_DUMP_INTERVAL` | `1800` 秒 | 缓存 dump 周期 |
+| `DNS_ENTRY_LISTEN` / `DNS_API_LISTEN` | `0.0.0.0:53` / `127.0.0.1:9091` | DNS 与管理 API 监听地址 |
+| `MOSDNS_LOG_LEVEL` / `MOSDNS_LOG_FILE` | `info` / `/etc/mosdns/mosdns.log` | 日志级别与文件 |
+| `ENABLE_ROS_SYNC` | `0` | 旧 `sync-ai` 集成默认关闭且已废弃 |
+| `TZ` | `Asia/Shanghai` | 容器时区 |
 
-| 变量 | 默认值 | 说明 |
-| :--- | :--- | :--- |
-| **DNS_CN** | 119.29.29.29,223.5.5.5,114.114.114.114 | 国内域名上游 DNS，建议使用国内公共 DNS |
-| **DNS_GLOBAL** | 1.1.1.1,8.8.8.8,9.9.9.9 | 国际域名上游 DNS |
-| **DNS_AI** | 同 DNS_GLOBAL | AI 域名上游 DNS，如需走特定 SGP/专线时单独配置 |
-| **TZ** | Asia/Shanghai | 容器时区 |
-| **ECS_PRESET** | 空 | 开启 CDN 优化，填写目标地区的公网 IP 即可 |
-| **DOH_ENABLED** | 0 | 设为 1 开启 DoH (DoH 证书需放 certs/ 目录下) |
-| **DOH_CERT** | /etc/mosdns/certs/fullchain.pem | DoH 容器内证书路径 |
-| **DOH_KEY** | /etc/mosdns/certs/privkey.pem | DoH 容器内私钥路径 |
-| **ROS_HOST** | 空 | **ROS AI 同步**：路由器 REST API IP，需开启 `www` 服务 |
-| **ROS_USER** | admin | ROS 管理员用户名 |
-| **ROS_PASS** | 空 | ROS 管理员密码 |
-| **AI_LIST_URL** | GitHub rules/ai-list.txt | AI 域名列表远端地址（支持自定义 API），默认每 2 分钟检查更新 |
-| **CONTAINER_DNS** | 8.8.8.8 | 容器内部下载规则时使用的 DNS。默认使用 8.8.8.8 以保证 GitHub 可访问 |
-| **RULE_FILE_MAX_AGE** | 82800 (23小时) | 规则文件保留秒数，超过此时间则触发更新，`0` 为每次强制下载 |
-| **RELOAD_DELAY** | 0 | 每日 04:30 规则重载前的延迟秒数 |
+## 运维
 
----
+```sh
+docker compose logs -f mosdns
+docker exec mosdns /opt/mosdns/status.sh
+docker exec mosdns /opt/mosdns/fetch.sh --probe
+docker exec mosdns /opt/mosdns/explain.sh example.com A
+docker exec mosdns /opt/mosdns/rollback.sh --lkg
+```
 
-## AI 分流配置说明 (含 ROS 防火墙联动)
-
-本项目内置了 AI 专用分流逻辑，自动识别 `chatgpt.com`, `gemini.google.com`, `claude.ai` 等域名并转发至 `DNS_AI` 对应的服务端。
-
-### 1. Linux / NAS
-直接启动容器，确保你的 `DNS_AI`（或 `DNS_GLOBAL`）上游指向你可用代理服务器的网关 IP（如新加坡节点 IP）即可。
-
-### 2. RouterOS (ROS) 防火墙联动
-在 ROS 环境中，通常利用防火墙地址列表（Address List）标记流量并强制走策略路由。MosDNS 容器内置了自动同步脚本。
-
-**实现步骤：**
-1. **开启 REST API**：确保路由器的 `www` 服务已开启并可从 LAN 访问。
-2. **配置同步参数**：在 `.env` 中设置 `ROS_HOST=192.168.88.1` 和 `ROS_PASS=password`。
-3. **自动写入**：容器每 2 分钟运行一次，将解析到的最新 AI IP 写入 ROS 的 `ai-sgp` 地址列表中。
-4. **配置策略**：在 ROS 中抓取目标为 `address-list=ai-sgp` 的流量，强制指定路由出口。
-
-> **优势**：无论 AI 域名对应的 IP 如何频繁变更，你的路由器都能实时跟踪并正确转发，无需人工干预。
-
----
-
-## ECS 优化（CDN 节点优选）
-
-ECS (EDNS Client Subnet) 允许 MosDNS 在向上游 DNS 发送查询时，携带一个模拟的客户端 IP。上游 CDN 会根据该子网信息，返回离该 IP 最近的节点。
-
-### 为什么需要 ECS？
-* **隐私保护**：本项目使用的是预设公网 IP，不发送你真实的内网 IP 或隐私 IP。
-* **解决跨境解析错误**：当你的代理 DNS 服务在海外，但你想访问国内网站（如 B 站）并希望解析到国内 CDN 时，开启 ECS 能强行纠正 CDN 调度。
-
-### 配置示例
-在 `.env` 中设置 `ECS_PRESET`：
-
-| 用户位置 | 建议配置 | 原理 |
-| :--- | :--- | :--- |
-| **海外回国用户** | `ECS_PRESET=119.29.29.29` | 上游以为你在中国，返回国内 CDN IP |
-| **国内出国用户** | `ECS_PRESET=8.8.8.8` | 上游以为你在美国，返回海外 CDN IP |
-| **回国在中东用户** | `ECS_PRESET=5.62.61.0` | 上游以为你在阿联酋，返回中东 CDN IP |
-
-### 启用与验证
-1. **添加变量**并重启容器：
-   ```bash
-   # Docker Compose
-   ECS_PRESET=119.29.29.29
-
-   # RouterOS 容器 (ROS)
-   /container envs add list=ENV_MOSDNS key=ECS_PRESET value=119.29.29.29
-   ```
-2. **使用 `dig` 验证效果**：
-   观察 `dig baidu.com` 返回的 IP 归属地是否符合预期。
-
----
-
-## 常见问题
-
-**1. 规则下载失败 (Connection refused/timeout)**
-* **原因**：容器内部 DNS 无法解析 GitHub。
-* **解决**：确保 `CONTAINER_DNS` 配置可用，默认值 `8.8.8.8` 通常可工作，若无法连接请更换其他 DNS。
-
-**2. ROS 启动后所有查询返回 SERVFAIL**
-* **原因**：ROS DNS 劫持规则捕获了 MosDNS 的 53 端口查询，形成回环。
-* **解决**：在防火墙 NAT 规则中排除 MosDNS 容器 IP。
-
-**3. AI 列表不更新**
-* **解决**：确保容器能访问互联网。如果同步失败，MosDNS 会保留旧列表，通常不会导致服务失效。
-
-**4. 多个站点同时重载导致服务卡顿**
-* **原因**：多台设备/容器每天同时触发重载规则，可能导致下载源受限或网络拥堵。
-* **解决**：通过配置 `RELOAD_DELAY` 参数，设置不同的重启时间。
-  * 在 `.env` 中设置 `RELOAD_DELAY=120`（延迟 2 分钟重载）。每个站点设置不同的秒数（如 0, 120, 300），可平滑负载。
+`status.sh` 查看当前规则、LKG、最近重启与同步日志；`fetch.sh --probe` 检查规则源可达性；`explain.sh` 检查规则命中与应答；`rollback.sh --lkg` 回退到最近可用规则。规则文件位于 `rules/`，运行状态、LKG、同步日志和历史版本位于 `data/state/`。DoH 如需启用，设置 `.env` 中 `DOH_ENABLED=1` 并将证书放入 `certs/`。

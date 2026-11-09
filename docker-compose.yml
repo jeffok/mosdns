@@ -4,7 +4,8 @@ services:
     container_name: mosdns
     network_mode: host
     restart: unless-stopped
-    volumes:
-      - ./certs:/etc/mosdns/certs:ro
-      - ./rules:/etc/mosdns/rules
     env_file: .env
+    volumes:
+      - ./rules:/etc/mosdns/rules
+      - ./data:/data
+      - ./certs:/etc/mosdns/certs:ro
