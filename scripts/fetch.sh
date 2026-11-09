@@ -198,6 +198,10 @@ main() {
     if probe_source "$base" >/dev/null && fetch_all_from "$base" && validate_staging; then
       echo "$base" > "$STATE_DIR/last_source"
       log "选用源 $(strip_secret "$base")"
+      case "$base" in
+        *://gh-proxy.com:*|*://gh-proxy.com/*|*://gh-proxy.com)
+          warn "third-party mirror unverified: manifest unavailable" ;;
+      esac
       return 0
     fi
     warn "源不可用或校验失败：$(strip_secret "$base")"
