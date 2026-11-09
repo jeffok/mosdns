@@ -124,7 +124,7 @@ docker exec mosdns /opt/mosdns/rollback.sh --lkg
 
 ## 在 RouterOS 容器中部署
 
-> **未在 szhome 实机验证。** 下列命令按 [RouterOS 7 Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)、[DNS](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS) 文档整理，目标机是 RB5009（ARM64，1GB RAM，1GB flash）。地址、接口名和 `usb1` 路径须按实机改。
+> **通用步骤按官方文档整理；szhome 的实测流程见下方「szhome 实测流程」**（容器已于 2026-11-09 部署并验证解析与规则同步，尚未切换 ROS DNS）。下列通用命令按 [RouterOS 7 Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)、[DNS](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS) 文档整理，目标机是 RB5009（ARM64，1GB RAM，1GB flash）。地址、接口名和 `usb1` 路径须按实机改。
 
 ### 前提
 
@@ -242,6 +242,55 @@ add list=MOUNT_MOSDNS_CERTS src=usb1/mosdns/certs dst=/etc/mosdns/certs
 ```
 
 若 LAN 客户端继续把路由器当 DNS，再设 `allow-remote-requests=yes`，并限制仅受信网段访问 UDP/TCP 53。也可把 DHCP 的 `dns-server` 直接设为 `172.17.0.2`。
+
+### szhome 实测流程（2026-11-09，RB5009 / 7.23.8）
+
+与上面的通用写法相比，szhome 用「容器与 LAN 同网段」的方式，不需要单独的 bridge、NAT 和 filter：
+
+```
+/interface veth add name=veth-mosdns address=192.168.88.222/24 gateway=192.168.88.254
+/interface bridge port add bridge=br-lan interface=veth-mosdns
+```
+
+- `192.168.88.222` 在 DHCP 池（`.1–.99`）之外；容器出网走现有的 LAN→WAN 放行与 masquerade。
+- `DNS_GLOBAL=8.8.8.8,1.1.1.1`：这两个地址在 main 表里已有经 `ovpn-szof` 的静态路由，不必再加。
+- 无外置盘：`root-dir`、`mounts` 都放在内置 flash（`mosdns/root`、`mosdns/rules`、`mosdns/data`）。
+- 镜像导入：国内直连 Docker Hub 不稳，用 `scp` 上传 tar 后 `/container add file=`。`docker save` 的输出 RouterOS 不认（报 `no config found in manifest`），需先转换：
+
+```
+docker pull --platform linux/arm64 jeffok/mosdns:latest
+docker save jeffok/mosdns:latest -o mosdns-oci.tar
+python3 tools/ros-docker-archive.py mosdns-oci.tar mosdns-arm64.tar
+scp mosdns-arm64.tar szhome-pub:
+```
+
+- 环境变量、挂载、容器（注意 `/container envs`、`/container mounts` 要逐条写完整路径；`mounts add` 没有 `name=` 参数）：
+
+```
+/container envs add list=ENV_MOSDNS key=TZ value="Asia/Shanghai"
+/container envs add list=ENV_MOSDNS key=DNS_GLOBAL value="8.8.8.8,1.1.1.1"
+/container envs add list=ENV_MOSDNS key=FETCH_RESOLVE value="gitea.jeffok.com:4443:192.168.88.252"
+/container envs add list=ENV_MOSDNS key=DNS_ENTRY_LISTEN value="0.0.0.0:53"
+/container mounts add list=MOUNT_MOSDNS src=/mosdns/rules dst=/etc/mosdns/rules
+/container mounts add list=MOUNT_MOSDNS src=/mosdns/data dst=/data
+/container add file=mosdns-arm64.tar interface=veth-mosdns root-dir=mosdns/root \
+    mountlists=MOUNT_MOSDNS envlist=ENV_MOSDNS name=mosdns hostname=mosdns \
+    start-on-boot=yes logging=yes memory-high=200MiB
+/container start mosdns
+```
+
+- 空的挂载目录会在首次启动时用镜像内置规则初始化，随后由同步脚本更新；`custom-hosts.txt` 约 10 秒内从 Gitea 拉到。
+- 验证（不改任何配置，用 ROS 自带的 `:resolve` 指定服务器）：
+
+```
+:put [:resolve www.baidu.com server=192.168.88.222]
+:put [:resolve gitea.jeffok.com server=192.168.88.222]
+```
+
+- 实测：启动后内存约 38MiB；baidu 返回国内地址，google、chatgpt 返回境外地址，gitea/reg/gitlab 返回 `192.168.88.252`；停止再启动后规则保留、解析正常。
+- 规则源可达性（从 ROS 出口实测，三个源都能下载 `gfw-domains.txt`）：gh-proxy 镜像、GitHub 直连、Gitea。
+- **CN 路由走 pppoe**：`Update_CN_Routes` 脚本导入 `cn_routes.rsc`（约 6190 条，`comment=CN`，gateway 设为 `pppoe-cn`），并启用 `daily_cn_routes`（每天 05:00，晚于 ASN-China 04:00 的构建）。默认路由仍是 pppoe 时这些路由不改变任何流量；只有把默认路由改到隧道后才起作用。
+- 内网固定解析：reg/gitea/gitlab 三条 A 记录已写入本仓库 `rules/custom-hosts.txt`，由容器每 120 秒从 Gitea 同步。该文件是 szhome 专用；其它站点共用前须先拆分。
 
 ### 保留 address-list 分流（szhome 当前做法）
 
