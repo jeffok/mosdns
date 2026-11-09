@@ -210,11 +210,6 @@ plugins:
   args:
   - matches: qname $geosite_cn $geosite_apple
     exec: jump cn_sequence
-- tag: aaaa_empty
-  type: sequence
-  args:
-  - matches: qtype 28
-    exec: reject
 - tag: main_sequence
   type: sequence
   args:
@@ -226,7 +221,7 @@ plugins:
   - exec: $query_custom_local
   # 4. AAAA 空应答（D5）；ENABLE_IPV6=1 时 entrypoint 把下面两行渲染为空
   - matches: qtype 28
-    exec: reject
+    exec: reject 0
   # 5–9. 名单分层（D13）
   - exec: $query_cn_exceptions
   - exec: $query_hard_list

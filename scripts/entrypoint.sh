@@ -244,7 +244,7 @@ render_config() {
   rm -f "$CONFIG.tmp.new"
 
   if [ "${ENABLE_IPV6:-0}" = 1 ] || [ "${ENABLE_IPV6:-0}" = true ] || [ "${ENABLE_IPV6:-0}" = yes ]; then
-    printf '%s\n' "$RENDERED" | grep -v -x -e '  - matches: qtype 28' -e '    exec: reject' > "$CONFIG.tmp.new" || true
+    printf '%s\n' "$RENDERED" | grep -v -x -e '  - matches: qtype 28' -e '    exec: reject 0' > "$CONFIG.tmp.new" || true
     RENDERED=$(cat "$CONFIG.tmp.new")
     rm -f "$CONFIG.tmp.new"
     log "ENABLE_IPV6=1：已关闭 AAAA 空应答"
