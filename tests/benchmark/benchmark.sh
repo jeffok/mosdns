@@ -49,6 +49,7 @@ cp /data/cache.dump "$OUT/cache-sigterm.dump"
 cp -a /etc/mosdns/rules /data/state/staging
 printf '\n# benchmark change\n' >> /data/state/staging/custom-local.txt
 # Loop dig throughout apply. Each row is elapsed start, elapsed finish, success.
+: > "$OUT/poll.tsv"
 sh /bench/poll.sh "$OUT/poll.tsv" &
 poll=$!
 sleep 0.2

@@ -15,12 +15,12 @@ ok() { PASS=$((PASS + 1)); printf 'PASS %s %s\n' "$1" "$2"; }
 ng() { FAIL=$((FAIL + 1)); printf 'FAIL %s %s\n' "$1" "$2"; }
 cleanup_case() {
   [ "$ACTIVE" = 1 ] || return 0
-  docker rm -f "$P-sut" "$P-cn" "$P-gl" >/dev/null 2>&1 || true
+  docker rm -fv "$P-sut" "$P-cn" "$P-gl" >/dev/null 2>&1 || true
   ACTIVE=0
 }
 cleanup() {
   cleanup_case
-  docker rm -f "$P-client" >/dev/null 2>&1 || true
+  docker rm -fv "$P-client" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -35,6 +35,7 @@ fi
 mkdir -p "$WORK/rules" "$WORK/state" "$WORK/host" "$WORK/baked"
 cp "$ROOT"/tests/fixtures/* "$WORK/rules/"
 chmod -R 777 "$WORK"
+  chmod +x "$ROOT/scripts"/*.sh "$ROOT/tests/mock_upstream.sh"
 if ! docker network create --subnet 172.31.251.0/24 "$NET" >/dev/null 2>&1; then
   ng M00 '无法创建独立 matrix 网络'; exit 1
 fi
@@ -64,6 +65,7 @@ start_case() {
     empty) : > "$WORK/rules/cn-exceptions.txt"; : > "$WORK/rules/apple-cn.txt" ;;
   esac
   chmod -R 777 "$WORK"
+  chmod +x "$ROOT/scripts"/*.sh "$ROOT/tests/mock_upstream.sh"
   if [ "$cn_ip" = SILENT ]; then start_silent "$P-cn" || return 1
   else start_mock "$P-cn" "$cn_ip" || return 1; fi
   if [ "$gl_ip" = SILENT ]; then start_silent "$P-gl" || return 1
@@ -78,13 +80,27 @@ start_case() {
     -e RULES_SOURCES= -e CUSTOM_HOSTS_SOURCES= -e RULES_UPDATE_INTERVAL=86400 \
     -e ENABLE_IPV6="$ipv6" -e FALLBACK_THRESHOLD="${threshold:-300}" \
     --entrypoint /opt/mosdns/entrypoint.sh "$IMAGE" >/dev/null 2>&1; then
-    docker rm -f "$P-cn" "$P-gl" >/dev/null 2>&1 || true
+    docker rm -fv "$P-cn" "$P-gl" >/dev/null 2>&1 || true
     return 1
   fi
   ACTIVE=1
+  for role in cn gl; do
+    case "$role" in
+      cn) value=$cn_ip; upstream=172.31.251.2 ;;
+      gl) value=$gl_ip; upstream=172.31.251.3 ;;
+    esac
+    [ "$value" = SILENT ] && continue
+    probe_type=A; case "$value" in *:*) probe_type=AAAA ;; esac
+    attempt=0
+    while [ "$attempt" -lt 20 ]; do
+      if docker exec "$P-sut" dig @"$upstream" upstream-ready.test "$probe_type" +time=1 +tries=1 +short 2>/dev/null | grep -Fxq "$value"; then break; fi
+      sleep 0.05
+      attempt=$((attempt + 1))
+    done
+  done
   i=0
   while [ "$i" -lt 6 ]; do
-    if docker exec "$P-sut" dig @127.0.0.1 -p 53 ready.matrix.test A +tries=1 +time=1 +short >/dev/null 2>&1; then
+    if docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | grep -Fxq 192.0.2.10; then
       return 0
     fi
     sleep 0.5
@@ -96,7 +112,7 @@ query_for() {
   domain=$1; type=${2:-A}; limit=${3:-1}
   docker exec "$P-sut" dig @127.0.0.1 -p 53 "$domain" "$type" +tries=1 +time="$limit" +noall +comments +answer 2>&1
 }
-query() { query_for "$1" "${2:-A}" 1; }
+query() { query_for "$1" "${2:-A}" 6; }
 answer_for() { query_for "$1" "${2:-A}" "${3:-1}" | awk '!/^;/ && /[[:space:]]IN[[:space:]]A[[:space:]]/ {print $NF; exit}'; }
 rcode_for() { query_for "$1" "${2:-A}" "${3:-1}" | sed -n 's/.*status: \([^,]*\),.*/\1/p' | head -n 1; }
 answer() { query "$1" "${2:-A}" | awk '!/^;/ && /[[:space:]]IN[[:space:]]A[[:space:]]/ {print $NF; exit}'; }
@@ -113,7 +129,7 @@ ready_case() {
 }
 
 # Unknown domain outcomes (one isolated SUT per upstream response pair).
-if ready_case 192.0.2.1 198.51.100.1 0 normal M01; then
+if ready_case 192.0.2.1 198.51.100.1 0 normal M01 2000; then
   got=$(answer unknown-cn.matrix.test)
   [ "$got" = 192.0.2.1 ] && ok M01 '未知域名 CN 正常应答被接受' || ng M01 "未知域名 CN 应答期望 192.0.2.1，实际 $got"
 fi
@@ -136,11 +152,11 @@ if ready_case 192.0.2.1 SILENT 0 normal M05; then
 fi
 
 # Additional accepted/rejected address classes.
-if ready_case 172.16.8.50 198.51.100.1 0 normal M06; then
+if ready_case 172.16.8.50 198.51.100.1 0 normal M06 2000; then
   got=$(answer unknown-private.matrix.test)
   [ "$got" = 172.16.8.50 ] && ok M06 'RFC1918 私网应答被接受' || ng M06 "私网应答期望 172.16.8.50，实际 $got"
 fi
-if ready_case 100.64.1.2 198.51.100.1 0 normal M07; then
+if ready_case 100.64.1.2 198.51.100.1 0 normal M07 2000; then
   got=$(answer unknown-cgnat.matrix.test)
   [ "$got" = 100.64.1.2 ] && ok M07 'CGNAT 应答被接受' || ng M07 "CGNAT 应答期望 100.64.1.2，实际 $got"
 fi

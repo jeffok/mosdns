@@ -1,2 +1,2 @@
 FROM mosdns:v2-test
-RUN apk add --no-cache bind-tools curl docker-cli
+RUN apk add --no-cache bind-tools curl docker-cli busybox-extras
