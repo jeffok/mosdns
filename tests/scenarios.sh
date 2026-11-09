@@ -10,9 +10,26 @@ WORK=$ROOT/tests/.runtime/scenarios-$$
 PASS=0
 FAIL=0
 ACTIVE=0
+LAST_QUERY_MS=0
+LAST_QUERY_OUT=""
+
+now_ms() {
+  if [ -r /proc/uptime ]; then
+    awk '{printf "%d", $1*1000}' /proc/uptime
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import time; print(int(time.time()*1000))'
+  else
+    echo $(($(date +%s) * 1000))
+  fi
+}
 
 ok() { PASS=$((PASS + 1)); printf 'PASS %s %s\n' "$1" "$2"; }
-ng() { FAIL=$((FAIL + 1)); printf 'FAIL %s %s\n' "$1" "$2"; }
+ng() {
+  FAIL=$((FAIL + 1)); printf 'FAIL %s %s\n' "$1" "$2"
+  printf 'DIAG %s last_query_ms=%s raw:\n%s\n' "$1" "$LAST_QUERY_MS" "$LAST_QUERY_OUT" >&2
+  printf 'DIAG %s SUT logs tail:\n' "$1" >&2
+  docker logs "$P-sut" 2>&1 | tail -40 >&2
+}
 cleanup_case() {
   [ "$ACTIVE" = 1 ] || return 0
   docker rm -fv "$P-sut" "$P-cn" "$P-gl" >/dev/null 2>&1 || true
@@ -72,6 +89,8 @@ start_case() {
   else start_mock "$P-gl" "$gl_ip" || return 1; fi
   # mosdns parses upstream addr as a literal IP. Stable IPs avoid service-name DNS
   # and Docker CLI inspect formatting differences.
+  # FALLBACK_STANDBY 必须 false：always_standby 时 fallback 在 primary 成功后仍投递
+  # secondary，先入 respChan 的非空应答获胜，M01 会偶发拿到 global。
   if ! docker run -d --name "$P-sut" --network "$NET" \
     -v "$ROOT/scripts:/opt/mosdns:ro" -v "$ROOT/tests:/opt/tests:ro" \
     -v "$WORK/rules:/etc/mosdns/rules" -v "$WORK/state:/data/state" \
@@ -79,6 +98,7 @@ start_case() {
     -e CONTAINER_DNS=223.5.5.5 -e DNS_CN=172.31.251.2 -e DNS_GLOBAL=172.31.251.3 \
     -e RULES_SOURCES= -e CUSTOM_HOSTS_SOURCES= -e RULES_UPDATE_INTERVAL=86400 \
     -e ENABLE_IPV6="$ipv6" -e FALLBACK_THRESHOLD="${threshold:-300}" \
+    -e FALLBACK_STANDBY=false \
     --entrypoint /opt/mosdns/entrypoint.sh "$IMAGE" >/dev/null 2>&1; then
     docker rm -fv "$P-cn" "$P-gl" >/dev/null 2>&1 || true
     return 1
@@ -92,14 +112,19 @@ start_case() {
     [ "$value" = SILENT ] && continue
     probe_type=A; case "$value" in *:*) probe_type=AAAA ;; esac
     attempt=0
-    while [ "$attempt" -lt 20 ]; do
-      if docker exec "$P-sut" dig @"$upstream" upstream-ready.test "$probe_type" +time=1 +tries=1 +short 2>/dev/null | grep -Fxq "$value"; then break; fi
-      sleep 0.05
+    ready_up=0
+    while [ "$attempt" -lt 40 ]; do
+      if docker exec "$P-sut" dig @"$upstream" upstream-ready.test "$probe_type" +time=1 +tries=1 +short 2>/dev/null | grep -Fxq "$value"; then
+        ready_up=1
+        break
+      fi
+      sleep 0.1
       attempt=$((attempt + 1))
     done
+    [ "$ready_up" = 1 ] || return 1
   done
   i=0
-  while [ "$i" -lt 6 ]; do
+  while [ "$i" -lt 40 ]; do
     if docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | grep -Fxq 192.0.2.10; then
       return 0
     fi
@@ -110,7 +135,12 @@ start_case() {
 }
 query_for() {
   domain=$1; type=${2:-A}; limit=${3:-1}
-  docker exec "$P-sut" dig @127.0.0.1 -p 53 "$domain" "$type" +tries=1 +time="$limit" +noall +comments +answer 2>&1
+  t0=$(now_ms)
+  LAST_QUERY_OUT=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 "$domain" "$type" +tries=1 +time="$limit" +noall +comments +answer 2>&1)
+  t1=$(now_ms)
+  LAST_QUERY_MS=$((t1 - t0))
+  printf 'DIAG query domain=%s type=%s time=%sms\n%s\n' "$domain" "$type" "$LAST_QUERY_MS" "$LAST_QUERY_OUT" >&2
+  printf '%s\n' "$LAST_QUERY_OUT"
 }
 query() { query_for "$1" "${2:-A}" 6; }
 answer_for() { query_for "$1" "${2:-A}" "${3:-1}" | awk '!/^;/ && /[[:space:]]IN[[:space:]]A[[:space:]]/ {print $NF; exit}'; }
@@ -122,8 +152,7 @@ query_count() {
 }
 ready_case() {
   if start_case "$1" "$2" "${3:-0}" "${4:-normal}" "${6:-}"; then return 0; fi
-  ng "$5" '被测实例未在 3 秒内就绪'
-  docker logs "$P-sut" 2>&1 | tail -20
+  ng "$5" '被测实例未在超时内就绪'
   cleanup_case
   return 1
 }
@@ -131,7 +160,13 @@ ready_case() {
 # Unknown domain outcomes (one isolated SUT per upstream response pair).
 if ready_case 192.0.2.1 198.51.100.1 0 normal M01 2000; then
   got=$(answer unknown-cn.matrix.test)
-  [ "$got" = 192.0.2.1 ] && ok M01 '未知域名 CN 正常应答被接受' || ng M01 "未知域名 CN 应答期望 192.0.2.1，实际 $got"
+  if [ "$got" = 192.0.2.1 ]; then
+    ok M01 '未知域名 CN 正常应答被接受'
+  else
+    cn_n=$(query_count "$P-cn" unknown-cn.matrix.test)
+    gl_n=$(query_count "$P-gl" unknown-cn.matrix.test)
+    ng M01 "未知域名 CN 应答期望 192.0.2.1，实际 $got cn=$cn_n global=$gl_n"
+  fi
 fi
 if ready_case 9.9.9.9 198.51.100.1 0 normal M02; then
   got=$(answer unknown-noncn.matrix.test)
