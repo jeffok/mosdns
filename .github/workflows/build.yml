@@ -6,6 +6,8 @@ on:
     paths:
       - 'Dockerfile'
       - 'scripts/**'
+      - 'docker-compose.yml'
+      - '.env.example'
       - 'rules/**'
       - 'tests/**'
       - '.github/workflows/build.yml'
@@ -30,13 +32,14 @@ jobs:
       - name: Build local test image
         run: docker build -t mosdns:v2-test .
 
+      - name: Build smoke test tools image
+        run: docker build -f tests/benchmark/Dockerfile -t mosdns:p2-tools .
+
+      - name: Build smoke runner image
+        run: docker build -f tests/runner.Dockerfile -t mosdns:v2-runner .
+
       - name: Run containerized smoke tests
-        run: |
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD:$PWD" -w "$PWD" \
-            -e MOSDNS_IMAGE=mosdns:v2-test \
-            alpine:3.22 sh -c 'apk add --no-cache docker-cli docker-cli-compose bind-tools curl && sh tests/run.sh'
+        run: docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:$PWD" -w "$PWD" -e MOSDNS_IMAGE=mosdns:p2-tools mosdns:v2-runner
 
   build:
     needs: smoke
