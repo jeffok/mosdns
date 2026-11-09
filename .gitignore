@@ -1,9 +1,15 @@
-# 运行时下载的规则文件（Dockerfile 预下载，entrypoint 每日更新）
-rules/direct-list.txt
-rules/china_ip_list.txt
+# 运行时下载/生成的规则文件（Dockerfile 预热，entrypoint 每日更新）
+# 仓库基线仍跟踪，切勿加入本列表：custom-hosts.txt、custom-local.txt、ai-list.txt
+rules/cn-domains.txt
+rules/IPv4.China.list
+rules/gfw-domains.txt
+rules/proxy-domains.txt
+rules/ai-domains.txt
 rules/apple-cn.txt
-rules/proxy-list.txt
-rules/geosite-gfw.txt
+rules/cn-exceptions.txt
+rules/bogus-nxdomain.china.conf
+rules/bogus-ip.txt
+rules/accept-extra.txt
 
 # 运行时状态
 config.yaml
