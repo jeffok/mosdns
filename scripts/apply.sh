@@ -84,6 +84,11 @@ run_validate() {
   [ -x "$script" ] || script=/opt/mosdns/validate.sh
   if [ -x "$script" ]; then
     STATE_DIR="$STATE_DIR" LKG_DIR="$LKG_DIR" "$script" --dir "$1" >>"$STATE_DIR/sync.log" 2>&1
+    rc=$?
+    [ "$rc" = 0 ] || return "$rc"
+    if [ -f "$1/custom-hosts.txt" ]; then
+      STATE_DIR="$STATE_DIR" LKG_DIR="$LKG_DIR" "$script" --custom-hosts "$1/custom-hosts.txt" >>"$STATE_DIR/sync.log" 2>&1
+    fi
   else
     for f in cn-domains.txt IPv4.China.list gfw-domains.txt proxy-domains.txt; do
       [ -s "$1/$f" ] || return 1
@@ -122,13 +127,28 @@ canary() {
   cdir="$STATE_DIR/canary"
   rm -rf "$cdir"; mkdir -p "$cdir/rules"
   for f in "$src"/*; do [ -f "$f" ] && cp "$f" "$cdir/rules/"; done
-  cp "$RULES/custom-hosts.txt" "$cdir/rules/custom-hosts.txt" 2>/dev/null || : > "$cdir/rules/custom-hosts.txt"
+  # Runtime-generated support files (accept-extra, bogus-ip, custom-local)
+  # are not part of release-files; preserve active copies unless staged.
+  for f in "$RULES"/*; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    [ -f "$src/$name" ] || cp "$f" "$cdir/rules/" || return 1
+  done
+  # Check the full candidate set, including staged pins. Using active pins here
+  # would allow malformed custom-hosts updates to pass canary.
+  if [ -f "$src/custom-hosts.txt" ]; then
+    cp "$src/custom-hosts.txt" "$cdir/rules/custom-hosts.txt" || return 1
+  elif [ -f "$RULES/custom-hosts.txt" ]; then
+    cp "$RULES/custom-hosts.txt" "$cdir/rules/custom-hosts.txt" || return 1
+  else
+    : > "$cdir/rules/custom-hosts.txt"
+  fi
   cp "$CONFIG" "$cdir/config.yaml" 2>/dev/null || { err "没有可用的 config.yaml"; return 1; }
   sed -i \
     -e "s#listen: .*#listen: 127.0.0.1:$CANARY_PORT#" \
     -e "s#http: .*#http: 127.0.0.1:$CANARY_API#" \
     -e "s#/etc/mosdns/rules/#$cdir/rules/#g" \
-    -e "s#/etc/mosdns/cache.dump#$cdir/cache.dump#" \
+    -e "s#dump_file: .*#dump_file: $cdir/cache.dump#" \
     "$cdir/config.yaml"
   mosdns start -c "$cdir/config.yaml" >"$cdir/log" 2>&1 &
   cpid=$!
