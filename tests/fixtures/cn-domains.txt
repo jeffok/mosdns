@@ -1,0 +1,5 @@
+# cn 名单：test 域内被判定为国内的域名
+cn.test
+www.cn.test
+same.test
+cache.test

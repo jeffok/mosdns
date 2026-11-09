@@ -1,0 +1,3 @@
+# 固定解析（域名在前）
+pin.test 192.0.2.10
+domain:sub.pin.test 192.0.2.11

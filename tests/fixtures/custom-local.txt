@@ -1,0 +1,2 @@
+# 走国内 DNS 的自定义域名
+local.test

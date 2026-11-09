@@ -1,0 +1,3 @@
+# cn 例外（比硬/软名单父域更具体）
+exc.test
+fonts.hard.test

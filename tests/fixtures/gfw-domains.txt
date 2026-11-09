@@ -1,0 +1,3 @@
+# 硬名单
+domain:hard.test
+google.test

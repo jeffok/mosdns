@@ -1,0 +1,13 @@
+services:
+  test-runner:
+    build:
+      context: ..
+      dockerfile: tests/runner.Dockerfile
+    image: mosdns:v2-runner
+    environment:
+      MOSDNS_IMAGE: ${MOSDNS_IMAGE:-mosdns:p2-tools}
+    volumes:
+      - ${DOCKER_SOCKET:-${HOME}/.orbstack/run/docker.sock}:/var/run/docker.sock
+      - ${PWD}:${PWD}
+    working_dir: ${PWD}
+    network_mode: host

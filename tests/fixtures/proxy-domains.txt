@@ -1,0 +1,4 @@
+# 软名单：与 cn 有父域冲突，用于验证 D13 与软名单路径
+soft.test
+apple.test
+overflow.test
