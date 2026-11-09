@@ -124,6 +124,7 @@ run_validate() {
   fi
 }
 
+
 dig_ok() {
   port="$1"; name="$2"
   nslookup -port="$port" -timeout=2 "$name" 127.0.0.1 >/dev/null 2>&1
@@ -221,15 +222,21 @@ move_staging_into_rules() {
     [ -f "$f" ] || continue
     name=$(basename "$f")
     case "$name" in .*) continue ;; esac
-    cp "$f" "$RULES/$name.new" && mv "$RULES/$name.new" "$RULES/$name" || return 1
+    if ! cp "$f" "$RULES/$name.new" || ! mv "$RULES/$name.new" "$RULES/$name"; then
+      return 1
+    fi
   done
 }
 
 rollback_to_prev() {
   [ -d "$PREV_DIR" ] || { err "没有可回滚的上一版"; return 1; }
+  # Remove candidate-only managed files as well as restoring the prior set.
+  for name in cn-domains.txt proxy-domains.txt gfw-domains.txt ai-domains.txt IPv4.China.list apple-cn.txt cn-exceptions.txt bogus-nxdomain.china.conf bogus-ip.txt custom-hosts.txt; do
+    if [ -f "$RULES/$name" ] && [ ! -f "$PREV_DIR/$name" ]; then rm -f "$RULES/$name"; fi
+  done
   for f in "$PREV_DIR"/*; do
     [ -f "$f" ] || continue
-    cp "$f" "$RULES/$(basename "$f").new" && mv "$RULES/$(basename "$f").new" "$RULES/$(basename "$f")"
+    cp "$f" "$RULES/$(basename "$f").new" && mv "$RULES/$(basename "$f").new" "$RULES/$(basename "$f")" || return 1
   done
   request_restart || true
   wait_healthy "$RESTART_TIMEOUT" || { err "回滚后仍不健康"; return 1; }
@@ -241,6 +248,7 @@ if ! run_validate "$STAGING"; then
   err "校验失败，保持 LKG（主实例未重启）"
   exit 1
 fi
+
 
 if ! canary "$STAGING"; then
   err "金丝雀失败，主实例未重启"
@@ -256,7 +264,11 @@ ls -1 "$HISTORY_DIR" 2>/dev/null | sort -r | tail -n +$((HISTORY_KEEP + 1)) | wh
   rm -rf "$HISTORY_DIR/$old"
 done
 
-move_staging_into_rules || { err "切换文件失败，保持 LKG"; exit 1; }
+if ! move_staging_into_rules; then
+  err "切换文件失败，恢复上一版"
+  rollback_to_prev || err "恢复失败，请人工介入"
+  exit 1
+fi
 
 t0=$(now_ms)
 if ! request_restart; then
