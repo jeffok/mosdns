@@ -7,6 +7,8 @@ on:
       - 'Dockerfile'
       - 'scripts/**'
       - 'rules/**'
+      - 'tests/**'
+      - '.github/workflows/build.yml'
   schedule:
     - cron: '0 20 * * 0'  # 每周一 04:00 (UTC+8) 自动更新规则
   release:
@@ -19,7 +21,25 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build local test image
+        run: docker build -t mosdns:v2-test .
+
+      - name: Run containerized smoke tests
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:$PWD" -w "$PWD" \
+            -e MOSDNS_IMAGE=mosdns:v2-test \
+            alpine:3.22 sh -c 'apk add --no-cache docker-cli docker-cli-compose bind-tools curl && sh tests/run.sh'
+
   build:
+    needs: smoke
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
