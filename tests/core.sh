@@ -45,6 +45,7 @@ GL_ADDR=172.31.240.3
 AI_ADDR=172.31.240.4
 DEAD_ADDR=172.31.240.5
 ROS_ADDR=172.31.240.10
+SUT_ADDR=172.31.240.20
 
 start_mock() {
   name=$1; ip=$2; addr=$3
@@ -66,7 +67,7 @@ start_sut() {
   cp "$ROOT"/tests/fixtures/* "$WORK/rules/"
   chmod -R 777 "$WORK"
   chmod +x "$ROOT/scripts"/*.sh
-  if ! docker run -d --name "$P-sut" --network "$NET" \
+  if ! docker run -d --name "$P-sut" --network "$NET" --ip "$SUT_ADDR" \
     -v "$ROOT/scripts:/opt/mosdns:ro" -v "$ROOT/tests:/opt/tests:ro" \
     -v "$WORK/rules:/etc/mosdns/rules" -v "$WORK/state:/data/state" \
     -v "$WORK/host:/etc/mosdns/host" \
@@ -390,7 +391,7 @@ rm -rf "$WORK/rules" "$WORK/state" "$WORK/host"
 mkdir -p "$WORK/rules" "$WORK/state" "$WORK/host"
 cp "$ROOT"/tests/fixtures/* "$WORK/rules/"
 chmod -R 777 "$WORK"
-if docker run -d --name "$P-sut" --network "$NET" \
+if docker run -d --name "$P-sut" --network "$NET" --ip "$SUT_ADDR" \
   -v "$ROOT/scripts:/opt/mosdns:ro" -v "$ROOT/tests:/opt/tests:ro" \
   -v "$WORK/rules:/etc/mosdns/rules" -v "$WORK/state:/data/state" \
   -v "$WORK/host:/etc/mosdns/host" \

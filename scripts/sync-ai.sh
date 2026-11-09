@@ -51,16 +51,21 @@ fi
 
 AUTH=$(printf '%s:%s' "$ROS_USER" "$ROS_PASS" | base64 | tr -d '\n')
 API="${ROS_SCHEME}://${ROS_HOST}/rest/ip/firewall/address-list"
+WGET_ERR=${STATE_DIR:-/tmp}/sync-ai.wget.err
 
 api_get() {
-  wget -q -O- $WGET_INSECURE --header "Authorization: Basic $AUTH" "$1" 2>/dev/null || true
+  wget -q -O- $WGET_INSECURE --header "Authorization: Basic $AUTH" "$1" 2>"$WGET_ERR" || true
 }
 
 api_post() {
   wget -q -O- $WGET_INSECURE \
     --header "Authorization: Basic $AUTH" \
     --header "content-type: application/json" \
-    --post-data "$2" "$1" 2>/dev/null || true
+    --post-data "$2" "$1" 2>"$WGET_ERR" || true
+}
+
+wget_is_unauthorized() {
+  grep -q '401 Unauthorized' "$WGET_ERR" 2>/dev/null
 }
 
 is_valid_ipv4() {
@@ -106,12 +111,10 @@ normalize_domain() {
 [ -f "$AI_FILE" ] || { warn "缺少 $AI_FILE，跳过本轮（名单更新请走 fetch/validate/apply）"; exit 0; }
 
 probe=$(api_get "${API}?list=${LIST}&comment=${COMMENT}")
-case "$probe" in
-  *'"error":401'*|*'"error": 401'*|*Unauthorized*)
-    warn "RouterOS 认证失败，本轮跳过（DNS 不受影响）"
-    exit 0
-    ;;
-esac
+if wget_is_unauthorized || printf '%s' "$probe" | grep -q '401'; then
+  warn "RouterOS 认证失败，本轮跳过（DNS 不受影响）"
+  exit 0
+fi
 if [ -z "$probe" ]; then
   warn "RouterOS REST 不可达或无响应，本轮跳过（DNS 不受影响）"
   exit 0

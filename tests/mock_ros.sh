@@ -102,13 +102,6 @@ case "$method $path" in
 esac
 HS
 chmod +x "$STATE/handler.sh"
-
-FIFO=$STATE/fifo
-rm -f "$FIFO"
-mkfifo "$FIFO"
 export MOCK_ROS_STATE="$STATE"
-
-while :; do
-  nc -l -p "$PORT" < "$FIFO" | sh "$STATE/handler.sh" > "$FIFO" || true
-  sleep 0.05
-done
+# -e 必须在最后；-lk 保持监听。stdin/stdout 接到已接受的连接。
+exec nc -lk -p "$PORT" -e "$STATE/handler.sh"
