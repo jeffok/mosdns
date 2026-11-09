@@ -524,6 +524,7 @@ sync_supervisor() {
 shutdown() {
   log "shutdown signal received"
   [ -n "${SYNC_PID:-}" ] && kill "$SYNC_PID" 2>/dev/null || true
+  [ -n "${ROS_SYNC_PID:-}" ] && kill "$ROS_SYNC_PID" 2>/dev/null || true
   stop_mosdns
   exit 0
 }
@@ -547,14 +548,16 @@ if ! check_config_files; then
   warn "some rule files still missing after init; mosdns may fail to start"
 fi
 
-# crond 只服务于旧版 sync-ai，且必须显式启用（D2）
+# ENABLE_ROS_SYNC 默认 0：不校验 ROS_*、不告警、不启动任何同步进程。
+# 仅 =1 时才校验 ROS_HOST / ROS_PASS；缺一则打一条错误并只禁用同步，mosdns 照常提供 DNS。
+ROS_SYNC_PID=""
+ROS_SYNC_OK=0
 if [ "${ENABLE_ROS_SYNC:-0}" = 1 ]; then
-  {
-    printf "CONTAINER_DNS=%s\n" "$CONTAINER_DNS"
-    printf "*/2 * * * * /sync-ai.sh >/dev/null 2>&1\n"
-  } | crontab -
-  crond -b -l 2
-  log "crond started for deprecated sync-ai (ENABLE_ROS_SYNC=1)"
+  if [ -z "${ROS_HOST:-}" ] || [ -z "${ROS_PASS:-}" ]; then
+    log "ERROR ENABLE_ROS_SYNC=1 但缺少 ROS_HOST 或 ROS_PASS，已禁用 AI 地址列表同步；DNS 服务不受影响"
+  else
+    ROS_SYNC_OK=1
+  fi
 fi
 
 start_mosdns

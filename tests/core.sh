@@ -246,5 +246,45 @@ else
   docker logs "$P-sut" 2>&1 | tail -20
 fi
 
+sut_ps() { docker exec "$P-sut" ps 2>/dev/null || true; }
+has_proc() { sut_ps | grep -v grep | grep -Fq "$1"; }
+
+# --- R01: ENABLE_ROS_SYNC=0 且 ROS_* 全空：无同步进程、无错误告警、DNS 正常 ---
+write_env "$WORK/env.r01"
+if start_sut "$WORK/env.r01"; then
+  sleep 1
+  logs=$(docker logs "$P-sut" 2>&1 || true)
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | head -n 1)
+  if [ "$got" = 192.0.2.10 ] \
+    && ! has_proc sync-ai \
+    && ! has_proc crond \
+    && ! printf '%s\n' "$logs" | grep -Eq 'ERROR ENABLE_ROS_SYNC|WARN.*ROS_|crond started|sync-ai'; then
+    ok R01 'ENABLE_ROS_SYNC=0 时无同步进程、无 ROS 报错、DNS 正常'
+  else
+    ng R01 "关闭同步语义不符 answer=$got ps=$(sut_ps | tr '\n' ';')"
+  fi
+else
+  ng R01 '被测实例未就绪'
+  docker logs "$P-sut" 2>&1 | tail -20
+fi
+
+# --- R02: ENABLE_ROS_SYNC=1 缺 ROS_PASS：一条错误日志、不启同步、DNS 正常 ---
+write_env "$WORK/env.r02"
+printf 'ENABLE_ROS_SYNC=1\nROS_HOST=192.0.2.8\nROS_USER=admin\nROS_PASS=\n' >> "$WORK/env.r02"
+if start_sut "$WORK/env.r02"; then
+  sleep 1
+  logs=$(docker logs "$P-sut" 2>&1 || true)
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | head -n 1)
+  err=$(printf '%s\n' "$logs" | grep -c 'ERROR ENABLE_ROS_SYNC=1 但缺少 ROS_HOST 或 ROS_PASS' || true)
+  if [ "$got" = 192.0.2.10 ] && [ "$err" = 1 ] && ! has_proc sync-ai && ! has_proc crond; then
+    ok R02 'ENABLE_ROS_SYNC=1 缺 ROS_PASS 时一条错误且 DNS 正常'
+  else
+    ng R02 "缺凭据语义不符 answer=$got err=$err ps=$(sut_ps | tr '\n' ';')"
+  fi
+else
+  ng R02 '被测实例未就绪'
+  docker logs "$P-sut" 2>&1 | tail -20
+fi
+
 printf 'CORE PASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 exit "$FAIL"

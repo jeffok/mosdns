@@ -54,7 +54,7 @@ Compose 使用 host 网络，监听地址默认为 `0.0.0.0:53`。请确保主�
 | `CANARY_PORT` / `CANARY_API` / `CANARY_SENTINEL` | `15353` / `19091` / `www.baidu.com` | 更新前金丝雀检查参数 |
 | `RESTART_TIMEOUT` | `20` 秒 | 规则应用后的健康检查等待时间 |
 | `DOH_ENABLED` / `DOH_CERT` / `DOH_KEY` / `DOH_LISTEN` | `0` / 默认证书路径 / 默认私钥路径 / `0.0.0.0:8443` | 可选 DoH 服务配置 |
-| `ENABLE_ROS_SYNC` | `0` | 旧 `sync-ai` 集成默认关闭且已废弃 |
+| `ENABLE_ROS_SYNC` | `0` | 默认关闭。关闭时无需填写 `ROS_HOST`/`ROS_USER`/`ROS_PASS`/`SYNC_AI_*`，不启动同步、不报错不告警。仅 `=1` 时才校验 `ROS_HOST` 与 `ROS_PASS`；缺则打一条错误并只禁用同步，DNS 照常 |
 | `TZ` | `Asia/Shanghai` | 容器本地时区；规则按本地时间每日 04:30 检查 |
 
 ## 运维
