@@ -215,20 +215,32 @@ plugins:
   args:
   # 1. 固定解析（D15/D19）：最先，写完即直接应答
   - exec: $query_custom_hosts
-  # 2. 缓存
+  - matches: has_resp
+    exec: accept
+  # 2. 缓存插件 exec 后仍会继续执行；命中时在 main_sequence 层接受，避免后续上游覆盖缓存应答
   - exec: $lazy_cache
+  - matches: has_resp
+    exec: accept
   # 3. 自定义国内域名
   - exec: $query_custom_local
+  - matches: has_resp
+    exec: accept
   # 4. AAAA 空应答（D5）；ENABLE_IPV6=1 时 entrypoint 把下面两行渲染为空
   - matches: qtype 28
     exec: reject 0
   # 5–9. 名单分层（D13）
   - exec: $query_cn_exceptions
+  - matches: has_resp
+    exec: accept
   - exec: $query_hard_list
   - matches: has_resp
     exec: accept
   - exec: $query_soft_list
+  - matches: has_resp
+    exec: accept
   - exec: $query_is_cn_domain
+  - matches: has_resp
+    exec: accept
   - exec: $fallback_unknown
 ######################## 服务入口 ########################
 - tag: udp_server
