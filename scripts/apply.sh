@@ -106,15 +106,30 @@ request_restart() {
   [ -f "$PID_FILE" ] && pid=$(cat "$PID_FILE")
   [ -z "$pid" ] && pid=$(pgrep -f 'mosdns start' 2>/dev/null | head -1)
   [ -n "$pid" ] || { err "找不到 mosdns 主进程"; return 1; }
-  kill -TERM "$pid" 2>/dev/null || { err "SIGTERM $pid 失败"; return 1; }
+  OLD_PID=$pid
+  : > "$PID_FILE.reload"
+  if ! kill -TERM "$pid" 2>/dev/null; then
+    rm -f "$PID_FILE.reload"
+    err "SIGTERM $pid 失败"
+    return 1
+  fi
   log "已向主实例 $pid 发送 SIGTERM（由 entrypoint 拉起）"
 }
 
 wait_healthy() {
   timeout_ms=$(( $1 * 1000 ))
   start=$(now_ms)
+  restarted=0
   while :; do
-    dig_ok "$DIG_PORT" "$CANARY_SENTINEL" && return 0
+    # A healthy response from the old listener is not a post-check. Wait for
+    # the supervisor to replace the terminated process before probing DNS.
+    if [ -n "${OLD_PID:-}" ]; then
+      current=$(cat "$PID_FILE" 2>/dev/null || pgrep -f 'mosdns start' 2>/dev/null | head -1)
+      if [ -n "$current" ] && [ "$current" != "$OLD_PID" ]; then restarted=1; fi
+    else
+      restarted=1
+    fi
+    if [ "$restarted" = 1 ] && dig_ok "$DIG_PORT" "$CANARY_SENTINEL"; then return 0; fi
     now=$(now_ms)
     [ $((now - start)) -ge "$timeout_ms" ] && return 1
     sleep 1

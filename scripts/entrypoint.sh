@@ -544,14 +544,20 @@ while :; do
   wait "$MOSDNS_PID" 2>/dev/null || true
   MOSDNS_PID=""
   stop_mosdns
-  MOSDNS_RESTARTS=$(( MOSDNS_RESTARTS + 1 ))
-  if [ "$MOSDNS_RESTARTS" -gt 1 ]; then
-    delay=$(( MOSDNS_RESTARTS * 2 ))
-    [ "$delay" -gt 60 ] && delay=60
-    warn "mosdns exited, restart #$MOSDNS_RESTARTS in ${delay}s"
-    sleep "$delay"
+  if [ -f "$PIDFILE.reload" ]; then
+    rm -f "$PIDFILE.reload"
+    MOSDNS_RESTARTS=0
+    log "mosdns stopped for a validated rule reload; restarting immediately"
   else
-    log "mosdns exited, restarting"
+    MOSDNS_RESTARTS=$(( MOSDNS_RESTARTS + 1 ))
+    if [ "$MOSDNS_RESTARTS" -gt 1 ]; then
+      delay=$(( MOSDNS_RESTARTS * 2 ))
+      [ "$delay" -gt 60 ] && delay=60
+      warn "mosdns exited, restart #$MOSDNS_RESTARTS in ${delay}s"
+      sleep "$delay"
+    else
+      log "mosdns exited, restarting"
+    fi
   fi
   start_mosdns
 done
