@@ -225,6 +225,8 @@ plugins:
   # 5–9. 名单分层（D13）
   - exec: $query_cn_exceptions
   - exec: $query_hard_list
+  - matches: has_resp
+    exec: accept
   - exec: $query_soft_list
   - exec: $query_is_cn_domain
   - exec: $fallback_unknown
