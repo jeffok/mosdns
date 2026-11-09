@@ -180,5 +180,71 @@ else
   docker logs "$P-sut" 2>&1 | tail -20
 fi
 
+query_count() {
+  docker logs "$1" 2>&1 | grep -F "$2" | grep -F 'mock_query' | wc -l | tr -d ' '
+}
+
+# --- A01: DNS_AI 独立 mock 时 AI 域名只打到 AI 上游 ---
+if ! start_mock "$P-ai" 203.0.113.1 "$AI_ADDR"; then
+  ng A01 'AI mock 启动失败'
+else
+  write_env "$WORK/env.a01"
+  printf 'DNS_AI=%s\n' "$AI_ADDR" >> "$WORK/env.a01"
+  if start_sut "$WORK/env.a01"; then
+    gl_before=$(query_count "$P-gl" 'ai.test')
+    got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 ai.test A +tries=1 +time=2 +short 2>/dev/null | head -n 1)
+    ai_n=$(query_count "$P-ai" 'ai.test')
+    gl_n=$(query_count "$P-gl" 'ai.test')
+    gl_hit=$((gl_n - gl_before))
+    if [ "$got" = 203.0.113.1 ] && [ "$ai_n" -ge 1 ] && [ "$gl_hit" -eq 0 ]; then
+      ok A01 '设置 DNS_AI 时 AI 域名只打到 AI 上游'
+    else
+      ng A01 "AI 分流不符 answer=$got ai=$ai_n global_delta=$gl_hit"
+    fi
+  else
+    ng A01 '被测实例未就绪'
+    docker logs "$P-sut" 2>&1 | tail -20
+  fi
+fi
+
+# --- A02: 同时在 gfw 名单里的 AI 域名也走 AI ---
+write_env "$WORK/env.a02"
+printf 'DNS_AI=%s\n' "$AI_ADDR" >> "$WORK/env.a02"
+if start_sut "$WORK/env.a02"; then
+  gl_before=$(query_count "$P-gl" 'ai-gfw.test')
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 ai-gfw.test A +tries=1 +time=2 +short 2>/dev/null | head -n 1)
+  ai_n=$(query_count "$P-ai" 'ai-gfw.test')
+  gl_n=$(query_count "$P-gl" 'ai-gfw.test')
+  gl_hit=$((gl_n - gl_before))
+  if [ "$got" = 203.0.113.1 ] && [ "$ai_n" -ge 1 ] && [ "$gl_hit" -eq 0 ]; then
+    ok A02 '同时在 gfw 名单的 AI 域名仍走 AI 上游'
+  else
+    ng A02 "AI+gfw 分流不符 answer=$got ai=$ai_n global_delta=$gl_hit"
+  fi
+else
+  ng A02 '被测实例未就绪'
+  docker logs "$P-sut" 2>&1 | tail -20
+fi
+
+# --- A03: 未设 DNS_AI 时 AI 域名走 global ---
+write_env "$WORK/env.a03"
+if start_sut "$WORK/env.a03"; then
+  gl_before=$(query_count "$P-gl" 'ai.test')
+  ai_before=$(query_count "$P-ai" 'ai.test')
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 ai.test A +tries=1 +time=2 +short 2>/dev/null | head -n 1)
+  gl_n=$(query_count "$P-gl" 'ai.test')
+  ai_n=$(query_count "$P-ai" 'ai.test')
+  gl_hit=$((gl_n - gl_before))
+  ai_hit=$((ai_n - ai_before))
+  if [ "$got" = 198.51.100.1 ] && [ "$gl_hit" -ge 1 ] && [ "$ai_hit" -eq 0 ]; then
+    ok A03 '未设 DNS_AI 时 AI 域名走 global'
+  else
+    ng A03 "默认 AI=global 不符 answer=$got global_delta=$gl_hit ai_delta=$ai_hit"
+  fi
+else
+  ng A03 '被测实例未就绪'
+  docker logs "$P-sut" 2>&1 | tail -20
+fi
+
 printf 'CORE PASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 exit "$FAIL"

@@ -2,8 +2,8 @@
 # 统计（供 validate 的相对下限参考，不是线上阈值）：
 cn-domains          6
 proxy-domains      3
-gfw-domains        2
-ai-domains         1
+gfw-domains        3
+ai-domains         2
 IPv4.China.list    3
 cn-exceptions      2
 apple-cn           1

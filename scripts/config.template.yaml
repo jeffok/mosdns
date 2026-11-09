@@ -12,9 +12,10 @@
 #
 # 查询流水线（D13/D15 顺序，改动前请先读方案 §3.2）：
 #   custom_hosts → lazy_cache → custom_local → AAAA 空应答 →
-#   cn_exceptions → 硬名单(gfw ∪ ai) → 软名单(proxy) → cn(含 apple-cn) → 未知
+#   cn_exceptions → AI(forward_ai / DNS_AI) → 硬名单(gfw) → 软名单(proxy) → cn(含 apple-cn) → 未知
 #   软名单与未知走同一条 D3 策略（cn_first：先问国内，接受集判定；否则走全球）。
 #   国内/软名单应答都先过 bogus 过滤（D10：bogus 必须先于接受集判定）。
+#   DNS_AI 留空时与 DNS_GLOBAL 相同，AI 分支仍先于 gfw 硬名单。
 log:
   level: %MOSDNS_LOG_LEVEL%
   file: %MOSDNS_LOG_FILE%
@@ -144,6 +145,11 @@ plugins:
   args:
   - exec: $ecs_handler
   - exec: $forward_global
+- tag: ai_sequence
+  type: sequence
+  args:
+  - exec: $ecs_handler
+  - exec: $forward_ai
 ######################## D3：未知域名/软名单 ########################
 # cn_first    ：先国内，应答通过接受集才采信；否则取全球（默认）
 # global_first：先全球，丢弃落在 CN 段的应答；否则取国内（现状行为）
@@ -191,10 +197,16 @@ plugins:
   # D13：cn 比 proxy/gfw 父域更具体的 511 条必须先于硬名单（例如 fonts.googleapis.com）
   - matches: qname $cn_exceptions
     exec: jump cn_sequence
+- tag: query_ai
+  type: sequence
+  args:
+  # AI 名单先于 gfw 硬名单，即使域名同时出现在两份名单也走 DNS_AI
+  - matches: qname $ai_domains
+    exec: jump ai_sequence
 - tag: query_hard_list
   type: sequence
   args:
-  - matches: qname $geosite_gfw $ai_domains
+  - matches: qname $geosite_gfw
     exec: jump global_sequence
 - tag: query_soft_list
   type: sequence
@@ -228,8 +240,11 @@ plugins:
   # 4. AAAA 空应答（D5）；ENABLE_IPV6=1 时 entrypoint 把下面两行渲染为空
   - matches: qtype 28
     exec: reject 0
-  # 5–9. 名单分层（D13）
+  # 5–10. 名单分层（D13）：cn_exceptions → AI → gfw 硬名单 → 软名单 → cn → 未知
   - exec: $query_cn_exceptions
+  - matches: has_resp
+    exec: accept
+  - exec: $query_ai
   - matches: has_resp
     exec: accept
   - exec: $query_hard_list

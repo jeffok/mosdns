@@ -4,7 +4,7 @@ MosDNS 为家庭或小型网络提供基于域名与规则集的 DNS 解析。�
 
 ## 架构
 
-客户端 DNS 请求进入 MosDNS 后，按顺序检查固定 hosts 与缓存，再根据 CN 例外、硬名单、软名单和 CN 规则选择国内或全局上游。未知域名默认使用 `UNKNOWN_POLICY=cn_first`：优先国内解析，接受 CN、RFC1918 与 CGNAT 地址；不接受的结果回退到全局上游。已知 bogus 地址会被丢弃。AAAA 默认返回空结果，可通过 `ENABLE_IPV6` 开启。
+客户端 DNS 请求进入 MosDNS 后，按顺序检查固定 hosts 与缓存，再根据 CN 例外、AI 名单、GFW 硬名单、软名单和 CN 规则选择上游。AI 域名走 `DNS_AI`（留空则与 `DNS_GLOBAL` 相同），且优先于 GFW 硬名单。未知域名默认使用 `UNKNOWN_POLICY=cn_first`：优先国内解析，接受 CN、RFC1918 与 CGNAT 地址；不接受的结果回退到全局上游。已知 bogus 地址会被丢弃。AAAA 默认返回空结果，可通过 `ENABLE_IPV6` 开启。
 
 容器先从镜像规则或 LKG 启动服务，再由后台同步脚本更新规则。规则每天按容器本地时区在 04:30 检查；每次更新会校验内容、金丝雀启动并在变更后重启 MosDNS，失败时保留当前可用规则。`custom-hosts.txt` 每 120 秒从配置的主 URL 检查，源不可用时保留当前版本。同步状态、历史版本和缓存 dump 保存在 `/data` 挂载卷中。
 
