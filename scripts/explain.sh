@@ -47,10 +47,10 @@ if [ -s "$RULES/custom-hosts.txt" ] && awk -v d="$id" '
   class="custom_hosts"; path="固定解析（hosts 直接应答，TTL 10s）"
 elif hit cn-exceptions.txt; then
   class="cn_exceptions"; path="国内（D13 例外优先于硬名单）"
+elif hit ai-domains.txt; then
+  class="ai"; path="AI 上游（DNS_AI，未设置时同 DNS_GLOBAL；优先于 GFW 硬名单）"
 elif hit gfw-domains.txt; then
   class="gfw"; path="全球（硬名单，经隧道）"
-elif hit ai-domains.txt; then
-  class="ai"; path="全球（AI 硬名单，经隧道）"
 elif hit proxy-domains.txt; then
   class="proxy"; path="软名单：D3 策略（默认 cn 优先 + 接受集判定）"
 elif hit cn-domains.txt; then
