@@ -20,3 +20,12 @@ __pycache__/
 
 # 本地 AI 辅助上下文
 .cursor/
+
+# 隔离备份目录与凭据
+openresty/
+*.key
+*.pem
+
+# 本机运行时持久数据
+data/
+tests/runtime/
