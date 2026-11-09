@@ -41,7 +41,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 log() { echo "[$(date '+%H:%M:%S')] [apply] $*"; }
 warn() { echo "[$(date '+%H:%M:%S')] [apply] WARN $*" >&2; }
 err() { echo "[$(date '+%H:%M:%S')] [apply] ERROR $*" >&2; }
-now_ms() { date +%s%N 2>/dev/null | cut -c1-13 || echo $(( $(date +%s) * 1000 )); }
+now_ms() {
+  awk '{ printf "%.0f", $1 * 1000 }' /proc/uptime 2>/dev/null \
+    || echo $(( $(date +%s) * 1000 ))
+}
 
 mkdir -p "$STATE_DIR" "$RULES"
 

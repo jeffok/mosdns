@@ -44,7 +44,10 @@ is_optional() {
 }
 
 # 计时（秒，两位小数）
-now_ms() { date +%s%N 2>/dev/null | cut -c1-13 || echo $(( $(date +%s) * 1000 )); }
+now_ms() {
+  awk '{ printf "%.0f", $1 * 1000 }' /proc/uptime 2>/dev/null \
+    || echo $(( $(date +%s) * 1000 ))
+}
 
 write_resolv_for_fetch() {
   # FETCH_RESOLVE="gitea.jeffok.com:4443:192.168.88.252"：让同步不依赖 DNS（写入 /etc/hosts）
