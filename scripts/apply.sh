@@ -59,8 +59,36 @@ fi
 
 # ---------- 变化检测（GS-1） ----------
 # 哈希只看「规则内容 + custom-hosts」，文件时间戳不参与
+if [ ! -f "$STAGING/custom-hosts.txt" ] && [ -f "$RULES/custom-hosts.txt" ]; then
+  mkdir -p "$STAGING"
+  cp "$RULES/custom-hosts.txt" "$STAGING/custom-hosts.txt"
+fi
+# Complete the candidate with local support files before comparing content.
+for support in custom-local.txt accept-extra.txt ai-list.txt; do
+  if [ ! -f "$STAGING/$support" ] && [ -f "$RULES/$support" ]; then
+    mkdir -p "$STAGING"
+    cp "$RULES/$support" "$STAGING/$support" || exit 1
+  fi
+done
+normalize_staging() {
+  src="$STAGING/bogus-nxdomain.china.conf"
+  [ -f "$src" ] || return 0
+  tmp="$STAGING/bogus-ip.txt.new"
+  {
+    echo "# generated from bogus-nxdomain.china.conf"
+    grep -oE '^bogus-nxdomain=[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$' "$src" \
+      | sed 's/^bogus-nxdomain=//' | sort -u
+  } > "$tmp" || return 1
+  mv "$tmp" "$STAGING/bogus-ip.txt"
+}
+
+if ! normalize_staging; then
+  err "规则规范化失败，保持当前版本（主实例未重启）"
+  exit 1
+fi
+
 staging_hash() {
-  ( cd "$1" 2>/dev/null && for f in *.txt *.list *.conf; do
+  ( cd "$1" 2>/dev/null && for f in accept-extra.txt ai-domains.txt apple-cn.txt bogus-ip.txt bogus-nxdomain.china.conf cn-exceptions.txt cn-domains.txt custom-hosts.txt custom-local.txt gfw-domains.txt IPv4.China.list proxy-domains.txt; do
       [ -f "$f" ] || continue
       printf '%s ' "$f"; sha256sum "$f" 2>/dev/null | cut -d' ' -f1
     done ) | sort | sha256sum | cut -d' ' -f1
