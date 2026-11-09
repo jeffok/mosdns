@@ -22,8 +22,9 @@ warn() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] [entrypoint] WARN $*" >&2; }
 mkdir -p "$RULES" "$STATE" "$(dirname "$CONFIG")"
 
 # ---------------------------------------------------------------- 容器内解析
-# 必须使用可靠的公共 DNS：同步脚本与入口逻辑都要解析 gitea/规则源域名
-CONTAINER_DNS="${CONTAINER_DNS:-8.8.8.8}"
+# 容器内解析用国内公共 DNS：gitea.jeffok.com 在 szhome 内网，8.8.8.8 会解析到
+# 缓存的旧地址导致同步失败（2026-11-09 实测）；CONTAINER_DNS 可显式覆盖。
+CONTAINER_DNS="${CONTAINER_DNS:-223.5.5.5}"
 echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
 log "resolv.conf -> $CONTAINER_DNS"
 

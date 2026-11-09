@@ -1,13 +1,18 @@
 #!/bin/sh
-# sync-ai.sh — 解析 AI 域名，通过 REST API 写入 RouterOS ai-sgp address-list
+# sync-ai.sh — 【已废弃，默认不运行】解析 AI 域名，通过 REST API 写入 RouterOS ai-sgp address-list
+#
+# 废弃原因（方案 D2）：新架构把分流放到路由表（按目的 IP），mosdns 不再回写 ROS 地址列表；
+# 该脚本还存在空窗期、明文凭据、写入列表无消费者等问题。
+# 仅当显式设置 ENABLE_ROS_SYNC=1 时由 entrypoint 通过 crond 启动；确认 dxbhome 等站点
+# 不再依赖后整体删除。
 RULES=/etc/mosdns/rules
 AI_LIST="$RULES/ai-list.txt"
-AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/ASN-China/release-files/ai-domains.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/ai-domains.txt|https://mirror.ghproxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/ai-domains.txt}"
+AI_LIST_URL="${AI_LIST_URL:-https://raw.githubusercontent.com/jeffok/ASN-China/release-files/ai-domains.txt|https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files/ai-domains.txt}"
 LIST="ai-sgp"
 COMMENT="mosdns-ai"
 TTL="1800s"
 # 优先使用 CONTAINER_DNS（容器内部专用 DNS），确保 AI 域名解析不受 DNS_GLOBAL 影响
-DNS="${CONTAINER_DNS:-8.8.8.8}"
+DNS="${CONTAINER_DNS:-223.5.5.5}"
 PIDFILE="${PIDFILE:-/tmp/mosdns.pid}"
 RELOAD_ON_AI_LIST_CHANGE="${RELOAD_ON_AI_LIST_CHANGE:-1}"
 AI_LIST_CHANGED=0
