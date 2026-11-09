@@ -22,9 +22,12 @@ warn() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] [entrypoint] WARN $*" >&2; }
 mkdir -p "$RULES" "$STATE" "$(dirname "$CONFIG")"
 
 # ---------------------------------------------------------------- 容器内解析
-# 容器内解析用国内公共 DNS：gitea.jeffok.com 在 szhome 内网，8.8.8.8 会解析到
-# 缓存的旧地址导致同步失败（2026-11-09 实测）；CONTAINER_DNS 可显式覆盖。
-CONTAINER_DNS="${CONTAINER_DNS:-223.5.5.5}"
+# 默认 DNSPod 公共 DNS。jeffok.com 按线路解析，不同解析器结果不同属正常。
+# 显式设为空字符串时同样回退默认值，不报错。
+# szhome 访问内网 Gitea 请用 FETCH_RESOLVE=gitea.jeffok.com:4443:192.168.88.252。
+CONTAINER_DNS="${CONTAINER_DNS:-119.29.29.29}"
+CONTAINER_DNS=$(printf '%s' "$CONTAINER_DNS" | tr -d '[:space:]')
+[ -n "$CONTAINER_DNS" ] || CONTAINER_DNS=119.29.29.29
 echo "nameserver $CONTAINER_DNS" > /etc/resolv.conf
 log "resolv.conf -> $CONTAINER_DNS"
 
