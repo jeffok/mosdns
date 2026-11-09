@@ -64,13 +64,14 @@ if [ "$qtype" = "AAAA" ] && [ "${ENABLE_IPV6:-0}" != 1 ]; then
 fi
 
 echo "实际应答:"
-out=$(nslookup -type="$qtype" -timeout=3 "$id" "$DNS" 2>&1 | sed -n 's/^Address: //p' | grep -v '^#')
+out=$(nslookup -type="$qtype" -timeout=3 "$id" "$DNS" 2>/dev/null | awk '/^Name:/{f=1;next} f && /^Address/{print $2}')
 [ -z "$out" ] && out="（无应答）"
 echo "$out" | sed 's/^/  /'
 
 # 对 A 记录做归属判断（CN / 私网 / 其它 → 预期出口）
 if [ "$qtype" = "A" ]; then
   for ip in $out; do
+    case "$ip" in ""|"（无应答）") continue ;; esac
     case "$ip" in *:*) continue ;; esac
     if awk -v ip="$ip" 'function toint(s,  a){split(s,a,"."); return a[1]*16777216+a[2]*65536+a[3]*256+a[4]}
         BEGIN{ipi=toint(ip)}
