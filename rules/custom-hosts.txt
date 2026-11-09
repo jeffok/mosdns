@@ -16,5 +16,8 @@
 #   domain:corp.example.cn   192.0.2.20 192.0.2.21 2001:db8::20
 #   full:api.example.com     203.0.113.7
 #
-# 注意：本仓库目前不含任何真实条目。szhome 的 gitea/reg/gitlab 等内网域名
-# 是否写入本文件，待确认 dxbhome 等其它站点是否共用同一文件后再定。
+# szhome 内网固定解析（原 RouterOS /ip dns static 的 3 条 A 记录，精确匹配）。
+# 若 dxbhome 等其它站点将来共用本文件，需先拆分，否则会被解析到 szhome 的地址。
+reg.jeffok.com     192.168.88.252
+gitea.jeffok.com   192.168.88.252
+gitlab.jeffok.com  192.168.88.252
