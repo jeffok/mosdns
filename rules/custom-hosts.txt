@@ -1,3 +1,20 @@
-# 静态 IP 映射（格式：IP 域名）
-# 1.2.3.4 example.com
-# 10.0.0.1 internal.local
+# 固定解析（mosdns hosts 插件格式）：每行「域名表达式 IP [IP...]」，域名在前
+#
+# 匹配规则（按 mosdns v5.3.4 源码核实）：
+#   纯域名       精确匹配，只命中该名称
+#   domain:前缀  命中该名称及其全部子域
+#   full:前缀    等价于精确匹配
+# 其它要点：
+#   - 行内 # 之后为注释；A / AAAA 可混写，可写多个 IP
+#   - 应答 TTL 固定 10 秒，不可按条目调整
+#   - 只处理 A / AAAA 查询；名称命中但没有对应类型时返回空应答（NODATA），不泄漏到上游
+#     （例如只写 IPv4 时 AAAA 查询返回空；TXT/HTTPS 等其它类型会继续走后续流水线）
+#   - 本文件在 mosdns 启动时加载，修改后需重启才生效
+#
+# 示例（取消注释前请确认 IP 与站点匹配）：
+#   gitea.example.com        192.0.2.10
+#   domain:corp.example.cn   192.0.2.20 192.0.2.21 2001:db8::20
+#   full:api.example.com     203.0.113.7
+#
+# 注意：本仓库目前不含任何真实条目。szhome 的 gitea/reg/gitlab 等内网域名
+# 是否写入本文件，待确认 dxbhome 等其它站点是否共用同一文件后再定。
