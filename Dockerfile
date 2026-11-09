@@ -40,9 +40,12 @@ RUN set -eu \
 # 规则源条目（ai-domains）缺失时退回仓库内的 ai-list.txt，保证 domain_set 可加载
 RUN cd /opt/mosdns-rules && if [ -s ai-domains.txt ]; then :; else cp ai-list.txt ai-domains.txt; fi
 
+# 构建产物同样执行运行时阈值、格式与哨兵校验，拒绝非空但损坏的兜底规则。
+RUN sh /opt/mosdns/validate.sh --dir /opt/mosdns-rules
+
 RUN chmod +x /opt/mosdns/*.sh 2>/dev/null || true
 
-ENV MOSDNS_VERSION=2.0.0
+ENV MOSDNS_VERSION=2.0.0 TZ=Asia/Shanghai
 ENV RULES_DIR=/etc/mosdns/rules \
     STATE_DIR=/data/state
 
