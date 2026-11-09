@@ -289,7 +289,7 @@ scp mosdns-arm64.tar szhome-pub:
 
 - 实测：启动后内存约 38MiB；baidu 返回国内地址，google、chatgpt 返回境外地址，gitea/reg/gitlab 返回 `192.168.88.252`；停止再启动后规则保留、解析正常。
 - 规则源可达性（从 ROS 出口实测，三个源都能下载 `gfw-domains.txt`）：gh-proxy 镜像、GitHub 直连、Gitea。
-- **CN 路由走 pppoe**：`Update_CN_Routes` 脚本导入 `cn_routes.rsc`（约 6190 条，`comment=CN`，gateway 设为 `pppoe-cn`），并启用 `daily_cn_routes`（每天 05:00，晚于 ASN-China 04:00 的构建）。默认路由仍是 pppoe 时这些路由不改变任何流量；只有把默认路由改到隧道后才起作用。
+- **CN 路由走 pppoe**：见下方「按 IP 段分流」一节（`Update_CN_Routes` 导入约 6190 条，每天 11:30 更新；默认路由已改为经隧道）。
 - 内网固定解析：reg/gitea/gitlab 三条 A 记录已写入本仓库 `rules/custom-hosts.txt`，由容器每 120 秒从 Gitea 同步。该文件是 szhome 专用；其它站点共用前须先拆分。
 
 ### szhome 当前分流方式：按 IP 段（2026-11-09 完成）
