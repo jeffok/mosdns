@@ -284,5 +284,12 @@ if ! wait_healthy "$RESTART_TIMEOUT"; then
 fi
 t1=$(now_ms)
 echo "$((t1 - t0))" > "$STATE_DIR/last_restart_ms"
+if [ -f "$SCRIPT_DIR/runtime.sh" ]; then
+  . "$SCRIPT_DIR/runtime.sh"
+  RUNTIME_VALIDATE_SCRIPT="$SCRIPT_DIR/validate.sh"
+  if ! runtime_promote_lkg "$RULES" "$LKG_DIR"; then
+    warn "应用成功但完整 LKG 快照未能发布"
+  fi
+fi
 log "应用完成，重启到可用耗时 $((t1 - t0))ms"
 exit 0

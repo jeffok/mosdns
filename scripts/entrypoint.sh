@@ -147,7 +147,7 @@ render_config() {
   CACHE_SIZE="${CACHE_SIZE:-10240}"
   LAZY_CACHE_TTL="${LAZY_CACHE_TTL:-120}"
   CACHE_DUMP_INTERVAL="${CACHE_DUMP_INTERVAL:-1800}"
-  CACHE_DUMP_FILE="${CACHE_DUMP_FILE:-/etc/mosdns/cache.dump}"
+  CACHE_DUMP_FILE="${CACHE_DUMP_FILE:-/data/cache.dump}"
 
   UPSTREAMS_CN=$(dns_to_yaml "$DNS_CN")
   UPSTREAMS_GLOBAL=$(dns_to_yaml "$DNS_GLOBAL")
@@ -296,7 +296,7 @@ restart_mosdns() {
 }
 
 # ---------------------------------------------------------------- 同步辅助（内置兜底用）
-RULES_SOURCES="${RULES_SOURCES:-https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://gitea.jeffok.com:4443/jeff/asn-china/raw/branch/release-files}"
+RULES_SOURCES="${RULES_SOURCES-https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://gitea.jeffok.com:4443/jeff/asn-china/raw/branch/release-files}"
 RULES_FILES="cn-domains.txt IPv4.China.list gfw-domains.txt proxy-domains.txt apple-cn.txt cn-exceptions.txt ai-domains.txt bogus-nxdomain.china.conf"
 RULES_PROBE_FILE="gfw-domains.txt"
 RULES_PROBE_TIMEOUT="${RULES_PROBE_TIMEOUT:-5}"
@@ -405,7 +405,7 @@ sync_rules_once() {
 }
 
 # custom-hosts：单主源；主源不可达时保持当前文件，不切到其它源（§19.5 / GS-15）
-CUSTOM_HOSTS_SOURCES="${CUSTOM_HOSTS_SOURCES:-https://gitea.jeffok.com:4443/jeff/mosdns/raw/branch/main/rules/custom-hosts.txt}"
+CUSTOM_HOSTS_SOURCES="${CUSTOM_HOSTS_SOURCES-https://gitea.jeffok.com:4443/jeff/mosdns/raw/branch/main/rules/custom-hosts.txt}"
 CUSTOM_HOSTS_INTERVAL="${CUSTOM_HOSTS_INTERVAL:-120}"
 
 sync_custom_hosts_once() {
@@ -519,6 +519,14 @@ init_rules
 prepare_optional_files
 write_accept_extra
 convert_bogus
+. "$SCRIPT_DIR/runtime.sh"
+RUNTIME_VALIDATE_SCRIPT="$SCRIPT_DIR/validate.sh"
+if ! runtime_restore_lkg "$STATE/lkg" "$RULES"; then
+  warn "no complete validated LKG snapshot; retaining image/current rules"
+  runtime_init_lkg_if_missing "$RULES" "$STATE/lkg" || warn "current rules are not eligible for initial LKG snapshot"
+else
+  log "restored last known good rules before starting mosdns"
+fi
 render_config || { warn "config render failed"; exit 1; }
 if ! check_config_files; then
   warn "some rule files still missing after init; mosdns may fail to start"

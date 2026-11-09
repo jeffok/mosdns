@@ -9,9 +9,8 @@ set -u
 STATE_DIR="${STATE_DIR:-/data/state}"
 RULES="${RULES_DIR:-/etc/mosdns/rules}"
 SCRIPT_DIR="${SCRIPT_DIR:-/opt/mosdns}"
-RULES_UPDATE_INTERVAL="${RULES_UPDATE_INTERVAL:-86400}"
 CUSTOM_HOSTS_INTERVAL="${CUSTOM_HOSTS_INTERVAL:-120}"
-CUSTOM_HOSTS_SOURCES="${CUSTOM_HOSTS_SOURCES:-https://gitea.jeffok.com:4443/jeff/mosdns/raw/branch/main/rules/custom-hosts.txt}"
+CUSTOM_HOSTS_SOURCES="${CUSTOM_HOSTS_SOURCES-https://gitea.jeffok.com:4443/jeff/mosdns/raw/branch/main/rules/custom-hosts.txt}"
 LKG_DIR="${LKG_DIR:-$STATE_DIR/lkg}"
 STAGING="${STAGING:-$STATE_DIR/staging}"
 FETCH_TIMEOUT="${RULES_FETCH_TIMEOUT:-60}"
@@ -23,20 +22,32 @@ warn() { echo "[$(date '+%H:%M:%S')] [sync] WARN $*" >&2; }
 mkdir -p "$STATE_DIR" "$LKG_DIR"
 
 # LKG 维护：任何一次成功应用之后才更新
-promote_lkg() {
-  for f in cn-domains.txt proxy-domains.txt gfw-domains.txt ai-domains.txt IPv4.China.list; do
-    [ -s "$RULES/$f" ] && cp "$RULES/$f" "$LKG_DIR/$f"
-  done
-}
-
 script() { s="$SCRIPT_DIR/$1"; [ -x "$s" ] || s="/opt/mosdns/$1"; printf '%s' "$s"; }
+
+write_resolv_for_fetch() {
+  [ -n "${FETCH_RESOLVE:-}" ] || return 0
+  host=${FETCH_RESOLVE%%:*}
+  rest=${FETCH_RESOLVE#*:}
+  ip=${rest##*:}
+  [ -n "$host" ] && [ -n "$ip" ] || return 0
+  if ! grep -qE "^[0-9.]+[[:space:]]+$host([[:space:]]|$)" /etc/hosts 2>/dev/null; then
+    printf '%s %s # FETCH_RESOLVE\n' "$ip" "$host" >> /etc/hosts
+    log "FETCH_RESOLVE: $host -> $ip"
+  fi
+}
 
 sync_custom_hosts() {
   [ -n "$CUSTOM_HOSTS_SOURCES" ] || return 0
+  write_resolv_for_fetch
   url=$(echo "$CUSTOM_HOSTS_SOURCES" | tr ',' '\n' | tr -d ' ' | head -1)
   tmp="$STATE_DIR/custom-hosts.new"
   # 主源不可达：保持当前文件（GS-15）
-  if ! wget -q -T "$FETCH_TIMEOUT" -O "$tmp" "$url" 2>/dev/null || [ ! -s "$tmp" ]; then
+  if [ -n "${CUSTOM_HOSTS_AUTH:-}" ]; then
+    fetch_custom_hosts() { wget -q -T "$FETCH_TIMEOUT" --header "Authorization: $CUSTOM_HOSTS_AUTH" -O "$tmp" "$url" 2>/dev/null; }
+  else
+    fetch_custom_hosts() { wget -q -T "$FETCH_TIMEOUT" -O "$tmp" "$url" 2>/dev/null; }
+  fi
+  if ! fetch_custom_hosts || [ ! -s "$tmp" ]; then
     warn "custom-hosts 主源不可达，保持当前文件"
     rm -f "$tmp"
     return 1
@@ -51,6 +62,8 @@ sync_custom_hosts() {
     return 1
   fi
   # 金丝雀 + 切换 + 重启交给 apply.sh 的统一路径
+  rm -rf "$STAGING"; mkdir -p "$STAGING"
+  for f in "$RULES"/*; do [ -f "$f" ] && cp "$f" "$STAGING/"; done
   cp "$tmp" "$STAGING/custom-hosts.txt"
   rm -f "$tmp"
   if "$(script apply.sh)" --now >>"$STATE_DIR/sync.log" 2>&1; then
@@ -62,13 +75,13 @@ sync_custom_hosts() {
 }
 
 sync_rules() {
+  write_resolv_for_fetch
   if ! "$(script fetch.sh)" >>"$STATE_DIR/sync.log" 2>&1; then
     warn "规则抓取失败，保持 LKG"
     return 1
   fi
   # fetch 已写出 staging；无变化时 apply 会直接退出
   if "$(script apply.sh)" --now >>"$STATE_DIR/sync.log" 2>&1; then
-    promote_lkg
     log "规则已应用"
   else
     warn "规则应用失败（校验/金丝雀/后检未通过）"
@@ -76,13 +89,21 @@ sync_rules() {
   fi
 }
 
-next_rules=$(( $(date +%s) + 30 ))   # 启动 30 秒后先同步一次
+if [ "${1:-}" = "--custom-hosts-once" ]; then
+  sync_custom_hosts
+  exit $?
+fi
+
+. "$(script runtime.sh)"
+now=$(date +%s)
+next_rules=$(runtime_next_rules "$now") || next_rules=$((now + 86400))
 while :; do
   now=$(date +%s)
   if [ "$now" -ge "$next_rules" ]; then
     log "开始规则同步"
     sync_rules || true
-    next_rules=$(( $(date +%s) + RULES_UPDATE_INTERVAL ))
+    now=$(date +%s)
+    next_rules=$(runtime_next_rules "$now") || next_rules=$((now + 86400))
   fi
   sync_custom_hosts || true
   sleep "$CUSTOM_HOSTS_PERIOD"
