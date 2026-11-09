@@ -15,13 +15,12 @@ ok() { PASS=$((PASS + 1)); printf 'PASS %s %s\n' "$1" "$2"; }
 ng() { FAIL=$((FAIL + 1)); printf 'FAIL %s %s\n' "$1" "$2"; }
 
 cleanup_case() {
-  [ "$ACTIVE" = 1 ] || return 0
-  docker rm -fv "$P-sut" "$P-cn" "$P-gl" "$P-ai" "$P-dead" >/dev/null 2>&1 || true
+  docker rm -fv "$P-sut" >/dev/null 2>&1 || true
   ACTIVE=0
 }
 cleanup() {
   cleanup_case
-  docker rm -fv "$P-ros" >/dev/null 2>&1 || true
+  docker rm -fv "$P-cn" "$P-gl" "$P-ai" "$P-dead" "$P-ros" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -136,6 +135,48 @@ if start_sut "$WORK/env.c02"; then
   fi
 else
   ng C02 '被测实例未就绪'
+  docker logs "$P-sut" 2>&1 | tail -20
+fi
+
+# --- U01: DNS_GLOBAL 两个上游（一个不响应）时硬名单查询仍成功，默认 concurrent=2 ---
+if ! start_silent "$P-dead" "$DEAD_ADDR"; then
+  ng U01 '静默上游启动失败'
+else
+  write_env "$WORK/env.u01"
+  printf 'DNS_GLOBAL=%s,%s\n' "$GL_ADDR" "$DEAD_ADDR" >> "$WORK/env.u01"
+  if start_sut "$WORK/env.u01"; then
+    cfg=$(docker exec "$P-sut" cat /etc/mosdns/config.yaml 2>/dev/null || true)
+    conc=$(printf '%s\n' "$cfg" | awk '/tag: forward_global/{f=1} f&&/concurrent:/{print $2; exit}')
+    has_gl=$(printf '%s\n' "$cfg" | grep -c "addr: $GL_ADDR" || true)
+    has_dead=$(printf '%s\n' "$cfg" | grep -c "addr: $DEAD_ADDR" || true)
+    got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 google.test A +tries=2 +time=5 +short 2>/dev/null | head -n 1)
+    if [ "$conc" = 2 ] && [ "$has_gl" -ge 1 ] && [ "$has_dead" -ge 1 ] && [ "$got" = 198.51.100.1 ]; then
+      ok U01 'DNS_GLOBAL 双上游且其一不响应时查询仍成功，默认 concurrent=2'
+    else
+      ng U01 "双上游结果不符 concurrent=$conc addrs=$has_gl/$has_dead answer=$got"
+    fi
+  else
+    ng U01 '被测实例未就绪'
+    docker logs "$P-sut" 2>&1 | tail -20
+  fi
+fi
+
+# --- U02: 显式 CONCURRENT_* 超出范围夹到 1..3 ---
+write_env "$WORK/env.u02"
+printf 'DNS_GLOBAL=%s,%s\nCONCURRENT_GLOBAL=99\nCONCURRENT_CN=0\nCONCURRENT_AI=2\n' "$GL_ADDR" "$DEAD_ADDR" >> "$WORK/env.u02"
+if start_sut "$WORK/env.u02"; then
+  cfg=$(docker exec "$P-sut" cat /etc/mosdns/config.yaml 2>/dev/null || true)
+  g=$(printf '%s\n' "$cfg" | awk '/tag: forward_global/{f=1} f&&/concurrent:/{print $2; exit}')
+  c=$(printf '%s\n' "$cfg" | awk '/tag: forward_cn/{f=1} f&&/concurrent:/{print $2; exit}')
+  a=$(printf '%s\n' "$cfg" | awk '/tag: forward_ai/{f=1} f&&/concurrent:/{print $2; exit}')
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 google.test A +tries=2 +time=5 +short 2>/dev/null | head -n 1)
+  if [ "$g" = 3 ] && [ "$c" = 1 ] && [ "$a" = 2 ] && [ "$got" = 198.51.100.1 ]; then
+    ok U02 'CONCURRENT_* 显式值夹到 1..3 且查询成功'
+  else
+    ng U02 "夹取不符 CN=$c GLOBAL=$g AI=$a answer=$got"
+  fi
+else
+  ng U02 '被测实例未就绪'
   docker logs "$P-sut" 2>&1 | tail -20
 fi
 

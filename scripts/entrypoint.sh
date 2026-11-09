@@ -122,6 +122,18 @@ count_dns() {
   echo "$n"
 }
 
+# mosdns forward 的 concurrent 上限 3（maxConcurrentQueries=3）。
+# 默认等于上游个数，显式值也夹到 1..3。上游个数本身不限。
+clamp_concurrent() {
+  n=$1
+  case "$n" in
+    ''|*[!0-9]*) n=1 ;;
+  esac
+  [ "$n" -lt 1 ] && n=1
+  [ "$n" -gt 3 ] && n=3
+  echo "$n"
+}
+
 render_config() {
   [ -f "$SCRIPT_DIR/config.template.yaml" ] && TEMPLATE="$SCRIPT_DIR/config.template.yaml" || TEMPLATE=/opt/mosdns/config.template.yaml
   [ -f "$TEMPLATE" ] || { warn "config template not found: $TEMPLATE"; return 1; }
@@ -131,9 +143,9 @@ render_config() {
   DNS_GLOBAL="${DNS_GLOBAL:-8.8.8.8}"
   DNS_AI="${DNS_AI:-$DNS_GLOBAL}"
   ECS_PRESET="${ECS_PRESET:-}"
-  CONCURRENT_CN="${CONCURRENT_CN:-$(count_dns "$DNS_CN")}"
-  CONCURRENT_GLOBAL="${CONCURRENT_GLOBAL:-$(count_dns "$DNS_GLOBAL")}"
-  CONCURRENT_AI="${CONCURRENT_AI:-$(count_dns "$DNS_AI")}"
+  CONCURRENT_CN=$(clamp_concurrent "${CONCURRENT_CN:-$(count_dns "$DNS_CN")}")
+  CONCURRENT_GLOBAL=$(clamp_concurrent "${CONCURRENT_GLOBAL:-$(count_dns "$DNS_GLOBAL")}")
+  CONCURRENT_AI=$(clamp_concurrent "${CONCURRENT_AI:-$(count_dns "$DNS_AI")}")
 
   case "${UNKNOWN_POLICY:-cn_first}" in
     cn_first)     FALLBACK_PRIMARY=query_cn_first;    FALLBACK_SECONDARY=global_sequence ;;

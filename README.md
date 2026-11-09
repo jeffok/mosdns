@@ -25,11 +25,11 @@ Compose 使用 host 网络，监听地址默认为 `0.0.0.0:53`。请确保主�
 
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `DNS_CN` | `119.29.29.29,223.5.5.5,114.114.114.114` | 国内解析上游，逗号分隔 |
-| `DNS_GLOBAL` | `8.8.8.8` | 全局上游；szhome 当前配置由隧道承载。`1.1.1.1` 尚未纳入 |
-| `DNS_AI` | 与 `DNS_GLOBAL` 相同 | 可选 AI 专用上游 |
+| `DNS_CN` | `119.29.29.29,223.5.5.5,114.114.114.114` | 国内解析上游，逗号分隔，个数不限 |
+| `DNS_GLOBAL` | `8.8.8.8` | 全局上游，逗号分隔，个数不限；szhome 当前配置由隧道承载。`1.1.1.1` 尚未纳入 |
+| `DNS_AI` | 与 `DNS_GLOBAL` 相同 | 可选 AI 专用上游，逗号分隔，个数不限；留空则继承 `DNS_GLOBAL` |
 | `UNKNOWN_POLICY` | `cn_first` | 未知域名策略：`cn_first` 或 `global_first` |
-| `CONCURRENT_CN` / `CONCURRENT_GLOBAL` / `CONCURRENT_AI` | `3` / `1` / `1` | 各上游并发数 |
+| `CONCURRENT_CN` / `CONCURRENT_GLOBAL` / `CONCURRENT_AI` | 等于对应 `DNS_*` 上游个数，上限 3 | 单次查询并发数。上游个数不限，单次查询最多并发 3 个；显式值也夹到 1..3 |
 | `FALLBACK_THRESHOLD` / `FALLBACK_STANDBY` | `300` ms / `true` | 未知域名双路 fallback 阈值与待命策略 |
 | `ECS_PRESET` | 空 | 可选 ECS 预设地址；默认不发送 ECS |
 | `ENABLE_IPV6` | `0` | `1` 开启 IPv6/AAAA 查询处理 |
