@@ -15,7 +15,14 @@ age_of() {
   fi
 }
 
-cnt() { [ -f "$1" ] && grep -cE '^[^#[:space:]]' "$1" 2>/dev/null || echo 0; }
+cnt() {
+  if [ ! -f "$1" ]; then
+    echo 0
+    return 0
+  fi
+  # grep -c 无匹配时打印 0 且退出码为 1；不能再用 || echo 0，否则会多打一个 0
+  grep -cE '^[^#[:space:]]' "$1" 2>/dev/null || true
+}
 
 echo "== mosdns 运行状态"
 if pgrep -f 'mosdns start' >/dev/null 2>&1; then

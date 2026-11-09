@@ -125,7 +125,7 @@ export MOSDNS_P2_CN_IP="$CN_IP" MOSDNS_P2_GL_IP="$GL_IP"
 export ROOT MOSDNS_IMAGE="$IMAGE" MOSDNS_P2_SUT="$SUT" MOSDNS_P2_NET="$NET" MOSDNS_P2_WORK="$WORK" MOSDNS_P2_EVIDENCE="$EVIDENCE_DIR"
 
 suite_no=12
-for suite in routing sync runtime scenarios; do
+for suite in routing sync runtime ops scenarios; do
   log_file="$EVIDENCE_DIR/$suite.log"
   rc=0
   if [ ! -f "$ROOT/tests/$suite.sh" ]; then
