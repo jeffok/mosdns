@@ -157,13 +157,18 @@ plugins:
   - exec: $global_sequence
   - matches: resp_ip $geoip_cn
     exec: drop_resp
-- tag: unknown_fallback
+- tag: fallback_unknown
   type: fallback
   args:
     primary: %FALLBACK_PRIMARY%
     secondary: %FALLBACK_SECONDARY%
     threshold: %FALLBACK_THRESHOLD%
     always_standby: %FALLBACK_STANDBY%
+- tag: query_d3_policy
+  type: sequence
+  args:
+  # 软名单命中即走本分支：D3 策略本身（cn 优先 + 接受集判定 / 全球优先）
+  - exec: $fallback_unknown
 ######################## 主流水线 ########################
 - tag: has_resp_sequence
   type: sequence
@@ -194,8 +199,12 @@ plugins:
 - tag: query_soft_list
   type: sequence
   args:
+  # 软名单（D13）与未知域名共用同一条 D3 策略，只是名单不同。
+  # 注意：mosdns 的 fallback 插件只能引用「已定义」的 tag，而 fallback 必须排在
+  # cn_sequence/global_sequence 之后才能定义；因此这里用 goto 进入主流水线末尾的
+  # unknown_fallback 之前定义好的策略分支（见下方 query_d3_policy）。
   - matches: qname $geosite_no_cn
-    exec: jump unknown_fallback
+    exec: goto query_d3_policy
 - tag: query_is_cn_domain
   type: sequence
   args:
@@ -223,7 +232,7 @@ plugins:
   - exec: $query_hard_list
   - exec: $query_soft_list
   - exec: $query_is_cn_domain
-  - exec: $unknown_fallback
+  - exec: $fallback_unknown
 ######################## 服务入口 ########################
 - tag: udp_server
   type: udp_server
