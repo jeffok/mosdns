@@ -1,40 +1,55 @@
+# mosdns v5.3.4 配置模板 —— 由 scripts/entrypoint.sh 渲染成 /etc/mosdns/config.yaml
+# 渲染方式：只替换下面列出的 VAR 标记与 $UPSTREAMS_* 块；本注释不参与替换
+#
+# 变量（未设置时用 entrypoint 里的默认值）：
+#   CONCURRENT_CN CONCURRENT_GLOBAL CONCURRENT_AI   并发上游数
+#   ECS_PRESET          ECS 预设地址，默认空（D6：不伪造 ECS）
+#   FALLBACK_PRIMARY / FALLBACK_SECONDARY / FALLBACK_THRESHOLD / FALLBACK_STANDBY
+#   CACHE_SIZE / LAZY_CACHE_TTL / CACHE_DUMP_INTERVAL / CACHE_DUMP_FILE
+#   DNS_ENTRY_LISTEN / DNS_API_LISTEN / MOSDNS_LOG_LEVEL / MOSDNS_LOG_FILE
+#   DOH_LISTEN / DOH_CERT / DOH_KEY
+#   ENABLE_IPV6=1 关闭 AAAA 空应答（D5）；UNKNOWN_POLICY=cn_first|global_first（D3）
+#
+# 查询流水线（D13/D15 顺序，改动前请先读方案 §3.2）：
+#   custom_hosts → lazy_cache → custom_local → AAAA 空应答 →
+#   cn_exceptions → 硬名单(gfw ∪ ai) → 软名单(proxy) → cn(含 apple-cn) → 未知
+#   软名单与未知走同一条 D3 策略（cn_first：先问国内，接受集判定；否则走全球）。
+#   国内/软名单应答都先过 bogus 过滤（D10：bogus 必须先于接受集判定）。
 log:
-  level: error
-  file: /etc/mosdns/mosdns.log
+  level: %MOSDNS_LOG_LEVEL%
+  file: %MOSDNS_LOG_FILE%
 api:
-  http: 127.0.0.1:9091
+  http: %DNS_API_LISTEN%
 plugins:
+######################## 上游 ########################
 - tag: forward_cn
   type: forward
   args:
-    concurrent: __CONCURRENT_CN__
+    concurrent: %CONCURRENT_CN%
     upstreams:
-__UPSTREAMS_CN__
+%UPSTREAMS_CN%
 - tag: forward_global
   type: forward
   args:
-    concurrent: __CONCURRENT_GLOBAL__
+    concurrent: %CONCURRENT_GLOBAL%
     upstreams:
-__UPSTREAMS_GLOBAL__
+%UPSTREAMS_GLOBAL%
 - tag: forward_ai
   type: forward
   args:
-    concurrent: __CONCURRENT_AI__
+    concurrent: %CONCURRENT_AI%
     upstreams:
-__UPSTREAMS_AI__
+%UPSTREAMS_AI%
 - tag: ecs_handler
   type: ecs_handler
   args:
+    # D6：新架构下默认不发 ECS（上游看到的出口就是实际出口），需要时用 ECS_PRESET 覆盖
     forward: false
-    preset: __ECS_PRESET__
     send: false
+    preset: "%ECS_PRESET%"
     mask4: 24
     mask6: 48
-- tag: ai_domains
-  type: domain_set
-  args:
-    files:
-    - /etc/mosdns/rules/ai-list.txt
+######################## 规则集 ########################
 - tag: custom_hosts
   type: hosts
   args:
@@ -49,34 +64,107 @@ __UPSTREAMS_AI__
   type: domain_set
   args:
     files:
-    - /etc/mosdns/rules/direct-list.txt
-- tag: geoip_cn
-  type: ip_set
-  args:
-    files:
-    - /etc/mosdns/rules/china_ip_list.txt
+    - /etc/mosdns/rules/cn-domains.txt
 - tag: geosite_apple
   type: domain_set
   args:
+    # 线上 release-files 中的 apple-cn.txt 目前为空（ASN-China 修复未发布）：
+    # 由 entrypoint 预检后生成，缺失时只是一个空集合，不影响启动
     files:
     - /etc/mosdns/rules/apple-cn.txt
-- tag: geosite_no_cn
+- tag: cn_exceptions
   type: domain_set
   args:
+    # 线上可能还没有 cn-exceptions.txt：同上，缺失或为空时 entrypoint 生成空文件并告警
     files:
-    - /etc/mosdns/rules/proxy-list.txt
+    - /etc/mosdns/rules/cn-exceptions.txt
 - tag: geosite_gfw
   type: domain_set
   args:
     files:
-    - /etc/mosdns/rules/geosite-gfw.txt
+    - /etc/mosdns/rules/gfw-domains.txt
+- tag: ai_domains
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/ai-domains.txt
+- tag: geosite_no_cn
+  type: domain_set
+  args:
+    files:
+    - /etc/mosdns/rules/proxy-domains.txt
+- tag: geoip_cn
+  type: ip_set
+  args:
+    files:
+    - /etc/mosdns/rules/IPv4.China.list
+- tag: bogus_ip
+  type: ip_set
+  args:
+    # D10：dnsmasq 的 bogus-nxdomain 清单由 validate.sh/fetch.sh 转成纯 IP 列表
+    files:
+    - /etc/mosdns/rules/bogus-ip.txt
+- tag: accept_extra
+  type: ip_set
+  args:
+    # 接受集里的非公网段：RFC1918 + 100.64/10（私网/CGNAT 在 CN 名单外，见 D3）
+    # 应答来自这些网段时同样采信（内网服务、公司域名）
+    files:
+    - /etc/mosdns/rules/accept-extra.txt
 - tag: lazy_cache
   type: cache
   args:
-    size: 10240
-    lazy_cache_ttl: 600
-    dump_file: /etc/mosdns/cache.dump
-    dump_interval: 30
+    size: %CACHE_SIZE%
+    # D9：lazy 候选值 120s；过期应答只影响 CDN 就近，不影响按 IP 的分流
+    lazy_cache_ttl: %LAZY_CACHE_TTL%
+    dump_file: %CACHE_DUMP_FILE%
+    # D9：候选 1800s，减少对 ROS 内部闪存的写入（实测见实施报告）
+    dump_interval: %CACHE_DUMP_INTERVAL%
+######################## 应答过滤（D10） ########################
+- tag: filter_cn_resp
+  type: sequence
+  args:
+  - matches: resp_ip $bogus_ip
+    exec: drop_resp
+    # 顺序约定：调用本 sequence 的路径必须是「国内/软名单结果」，
+    # 且 bogus 过滤先于下面的接受集判定 —— 130/165 个 bogus IP 落在 CN 段内
+  - matches: resp_ip $geoip_cn $accept_extra
+    exec: accept
+  - exec: drop_resp
+######################## 国内路径 ########################
+- tag: cn_sequence
+  type: sequence
+  args:
+  - exec: $ecs_handler
+  - exec: $forward_cn
+  - exec: $filter_cn_resp
+######################## 全球路径（经隧道） ########################
+- tag: global_sequence
+  type: sequence
+  args:
+  - exec: $ecs_handler
+  - exec: $forward_global
+######################## D3：未知域名/软名单 ########################
+# cn_first    ：先国内，应答通过接受集才采信；否则取全球（默认）
+# global_first：先全球，丢弃落在 CN 段的应答；否则取国内（现状行为）
+- tag: query_cn_first
+  type: sequence
+  args:
+  - exec: $cn_sequence
+- tag: query_global_first
+  type: sequence
+  args:
+  - exec: $global_sequence
+  - matches: resp_ip $geoip_cn
+    exec: drop_resp
+- tag: unknown_fallback
+  type: fallback
+  args:
+    primary: %FALLBACK_PRIMARY%
+    secondary: %FALLBACK_SECONDARY%
+    threshold: %FALLBACK_THRESHOLD%
+    always_standby: %FALLBACK_STANDBY%
+######################## 主流水线 ########################
 - tag: has_resp_sequence
   type: sequence
   args:
@@ -91,74 +179,60 @@ __UPSTREAMS_AI__
   type: sequence
   args:
   - matches: qname $custom_local_domains
-    exec: $ecs_handler
-  - matches: qname $custom_local_domains
-    exec: $forward_cn
-- tag: query_ai
+    exec: jump cn_sequence
+- tag: query_cn_exceptions
   type: sequence
   args:
-  - matches: qname $ai_domains
-    exec: $ecs_handler
-  - matches: qname $ai_domains
-    exec: $forward_ai
-- tag: cn_sequence
+  # D13：cn 比 proxy/gfw 父域更具体的 511 条必须先于硬名单（例如 fonts.googleapis.com）
+  - matches: qname $cn_exceptions
+    exec: jump cn_sequence
+- tag: query_hard_list
   type: sequence
   args:
-  - exec: $ecs_handler
-  - exec: $forward_cn
-  - exec: jump has_resp_sequence
-- tag: global_sequence
+  - matches: qname $geosite_gfw $ai_domains
+    exec: jump global_sequence
+- tag: query_soft_list
   type: sequence
   args:
-  - exec: $ecs_handler
-  - exec: prefer_ipv4
-  - exec: $forward_global
-  - exec: jump has_resp_sequence
-- tag: query_global_must_not_be_cn
-  type: sequence
-  args:
-  - exec: $global_sequence
-  - matches: resp_ip $geoip_cn
-    exec: drop_resp
+  - matches: qname $geosite_no_cn
+    exec: jump unknown_fallback
 - tag: query_is_cn_domain
   type: sequence
   args:
   - matches: qname $geosite_cn $geosite_apple
-    exec: $cn_sequence
-- tag: query_is_global_domain
+    exec: jump cn_sequence
+- tag: aaaa_empty
   type: sequence
   args:
-  - matches: qname $geosite_no_cn $geosite_gfw
-    exec: $global_sequence
-- tag: fallback
-  type: fallback
-  args:
-    primary: query_global_must_not_be_cn
-    secondary: cn_sequence
-    threshold: 300
-    always_standby: true
+  - matches: qtype 28
+    exec: reject
 - tag: main_sequence
   type: sequence
   args:
-  - exec: $lazy_cache
-  - exec: $query_custom_local
-  - exec: jump has_resp_sequence
-  - exec: $query_ai
-  - exec: jump has_resp_sequence
+  # 1. 固定解析（D15/D19）：最先，写完即直接应答
   - exec: $query_custom_hosts
-  - exec: jump has_resp_sequence
-  - exec: $query_is_global_domain
-  - exec: jump has_resp_sequence
+  # 2. 缓存
+  - exec: $lazy_cache
+  # 3. 自定义国内域名
+  - exec: $query_custom_local
+  # 4. AAAA 空应答（D5）；ENABLE_IPV6=1 时 entrypoint 把下面两行渲染为空
+  - matches: qtype 28
+    exec: reject
+  # 5–9. 名单分层（D13）
+  - exec: $query_cn_exceptions
+  - exec: $query_hard_list
+  - exec: $query_soft_list
   - exec: $query_is_cn_domain
-  - exec: jump has_resp_sequence
-  - exec: $fallback
+  - exec: $unknown_fallback
+######################## 服务入口 ########################
 - tag: udp_server
   type: udp_server
   args:
     entry: main_sequence
-    listen: 0.0.0.0:53
+    listen: %DNS_ENTRY_LISTEN%
 - tag: tcp_server
   type: tcp_server
   args:
     entry: main_sequence
-    listen: 0.0.0.0:53
+    listen: %DNS_ENTRY_LISTEN%
+%DOH_PLUGIN%
