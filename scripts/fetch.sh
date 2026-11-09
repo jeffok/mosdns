@@ -172,6 +172,15 @@ fetch_all_from() {
 }
 
 validate_staging() {
+  # Exact equality to the previously validated LKG needs no repeated validation.
+  unchanged=1
+  for file in $ALL_FILES; do
+    if ! cmp -s "$STAGING/$file" "${LKG_DIR:-$STATE_DIR/lkg}/$file"; then unchanged=0; break; fi
+  done
+  if [ "$unchanged" = 1 ]; then
+    log "规则与已验证 LKG 无变化，跳过校验"
+    return 0
+  fi
   validator="$SCRIPT_DIR/validate.sh"
   [ -x "$validator" ] || validator=/opt/mosdns/validate.sh
   [ -x "$validator" ] || { warn "validate.sh is unavailable"; return 1; }
