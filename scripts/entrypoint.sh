@@ -39,7 +39,7 @@ REQUIRED_FILES="cn-domains.txt IPv4.China.list gfw-domains.txt ai-domains.txt pr
 
 is_optional() {
   case "$1" in
-    cn-exceptions.txt|apple-cn.txt|bogus-ip.txt|accept-extra.txt) return 0 ;;
+    cn-exceptions.txt|apple-cn.txt|ai-domains.txt|bogus-ip.txt|accept-extra.txt) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -297,7 +297,7 @@ restart_mosdns() {
 
 # ---------------------------------------------------------------- 同步辅助（内置兜底用）
 RULES_SOURCES="${RULES_SOURCES:-https://gh-proxy.com/https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://raw.githubusercontent.com/jeffok/ASN-China/release-files,https://gitea.jeffok.com:4443/jeff/asn-china/raw/branch/release-files}"
-RULES_FILES="cn-domains.txt IPv4.China.list gfw-domains.txt proxy-domains.txt apple-cn.txt cn-exceptions.txt bogus-nxdomain.china.conf"
+RULES_FILES="cn-domains.txt IPv4.China.list gfw-domains.txt proxy-domains.txt apple-cn.txt cn-exceptions.txt ai-domains.txt bogus-nxdomain.china.conf"
 RULES_PROBE_FILE="gfw-domains.txt"
 RULES_PROBE_TIMEOUT="${RULES_PROBE_TIMEOUT:-5}"
 RULES_FETCH_TIMEOUT="${RULES_FETCH_TIMEOUT:-60}"
