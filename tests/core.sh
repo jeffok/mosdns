@@ -384,5 +384,50 @@ else
   docker logs "$P-sut" 2>&1 | tail -20
 fi
 
+# --- E01: --env-file .env.example 变量值干净且 DNS 正常 ---
+cleanup_case
+rm -rf "$WORK/rules" "$WORK/state" "$WORK/host"
+mkdir -p "$WORK/rules" "$WORK/state" "$WORK/host"
+cp "$ROOT"/tests/fixtures/* "$WORK/rules/"
+chmod -R 777 "$WORK"
+if docker run -d --name "$P-sut" --network "$NET" \
+  -v "$ROOT/scripts:/opt/mosdns:ro" -v "$ROOT/tests:/opt/tests:ro" \
+  -v "$WORK/rules:/etc/mosdns/rules" -v "$WORK/state:/data/state" \
+  -v "$WORK/host:/etc/mosdns/host" \
+  --env-file "$ROOT/.env.example" \
+  -e "DNS_CN=$CN_ADDR" -e "DNS_GLOBAL=$GL_ADDR" \
+  -e RULES_SOURCES= -e CUSTOM_HOSTS_SOURCES= \
+  -e RULES_UPDATE_INTERVAL=86400 -e CANARY_SENTINEL=pin.test -e REL_FLOOR_PCT=0 \
+  --entrypoint /opt/mosdns/entrypoint.sh "$IMAGE" >/dev/null 2>&1; then
+  ACTIVE=1
+  i=0
+  ready=0
+  while [ "$i" -lt 20 ]; do
+    if docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | grep -Fxq 192.0.2.10; then
+      ready=1; break
+    fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  envdump=$(docker exec "$P-sut" printenv 2>/dev/null || true)
+  logs=$(docker logs "$P-sut" 2>&1 || true)
+  dirty=$(printf '%s\n' "$envdump" | grep '#' || true)
+  auth=$(docker exec "$P-sut" sh -c 'printenv CUSTOM_HOSTS_AUTH || true' 2>/dev/null)
+  ros=$(docker exec "$P-sut" sh -c 'printenv ENABLE_ROS_SYNC || true' 2>/dev/null)
+  cdns=$(docker exec "$P-sut" sh -c 'printenv CONTAINER_DNS || true' 2>/dev/null)
+  conc=$(docker exec "$P-sut" sh -c 'printenv CONCURRENT_CN || true' 2>/dev/null)
+  got=$(docker exec "$P-sut" dig @127.0.0.1 -p 53 pin.test A +tries=1 +time=1 +short 2>/dev/null | head -n 1)
+  if [ "$ready" = 1 ] && [ "$got" = 192.0.2.10 ] && [ -z "$dirty" ] && [ -z "$auth" ] \
+    && [ "$ros" = 0 ] && [ "$cdns" = 119.29.29.29 ] && [ -z "$conc" ] \
+    && ! printf '%s\n' "$logs" | grep -Eq 'ERROR ENABLE_ROS_SYNC|sync-ai 后台循环' \
+    && ! has_proc sync-ai && ! has_proc crond; then
+    ok E01 '--env-file .env.example 变量值干净且 DNS 正常'
+  else
+    ng E01 "env-file 用例不符 ready=$ready answer=$got ros=$ros cdns=$cdns conc=$conc dirty=$(printf '%s' "$dirty" | tr '\n' ' ') auth=$(printf '%s' "$auth" | tr '\n' ' ')"
+  fi
+else
+  ng E01 '使用 .env.example 启动失败'
+fi
+
 printf 'CORE PASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 exit "$FAIL"
