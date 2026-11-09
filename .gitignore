@@ -17,3 +17,6 @@ certs/
 # 开发环境
 .venv/
 __pycache__/
+
+# 本地 AI 辅助上下文
+.cursor/
