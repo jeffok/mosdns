@@ -29,3 +29,4 @@ openresty/
 # 本机运行时持久数据
 data/
 tests/runtime/
+tests/.runtime/
