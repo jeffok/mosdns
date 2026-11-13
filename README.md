@@ -203,7 +203,7 @@ DHCP 的 `dns-server` 仍是 `192.168.88.254`，由路由器转发到容器。`s
 
 `8.8.8.8/32` 和 `1.1.1.1/32` 走 `ovpn-szof`，供 `DNS_GLOBAL` 使用。隧道端点 `183.56.180.152/32` 走 `pppoe-cn`。`rt-ovpn` 的默认路由是 `ovpn-szof`。地址池保留占位 `255.255.255.255`（comment `gfw-proxy-keep`）。
 
-mangle 只匹配从 `br-lan` 进入的新连接，路由器自己发出的包不打标。命中地址池的 UDP/443 与 TCP 走同一条连接标记。隧道是 TCP 8881。
+mangle 只匹配从 `br-lan` 进入的新连接，路由器自己发出的包不打标。隧道是 TCP 8881。发往 `gfw-proxy` 的新 UDP/443 由 forward 链回 `icmp-port-unreachable`，浏览器立即改走 TCP，不把 QUIC 塞进 TCP 隧道。
 
 路由器 `disable-ipv6=yes`。容器保持 `ENABLE_IPV6=0`。
 
