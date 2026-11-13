@@ -55,6 +55,11 @@ Compose 使用 host 网络，监听地址默认为 `0.0.0.0:53`。请确保主�
 | `RESTART_TIMEOUT` | `20` 秒 | 规则应用后的健康检查等待时间 |
 | `DOH_ENABLED` / `DOH_CERT` / `DOH_KEY` / `DOH_LISTEN` | `0` / 默认证书路径 / 默认私钥路径 / `0.0.0.0:8443` | 可选 DoH 服务配置 |
 | `ENABLE_ROS_ADDRLIST` | `0` | 默认关闭。`=1` 时把最终应答里来自全局/AI 路径、且不在国内 IP 表的 IPv4 写入 RouterOS 地址池。缺 `ROS_ADDRLIST_URL` 或 `ROS_PASS` 时打一条错误并关闭插件，DNS 照常。只用 HTTP |
+| `ROS_ADDRLIST_URL` / `ROS_USER` / `ROS_PASS` | 空 / `admin` / 空 | REST 地址（szhome 为 `http://192.168.88.254`）、用户、密码。密码只从环境变量读取 |
+| `ROS_ADDRLIST_LIST` | `gfw-proxy` | 写入的地址池 |
+| `ROS_ADDRLIST_TIMEOUT` | `5m` | 动态条目租约。应长于下游 DNS 缓存 |
+| `ROS_ADDRLIST_TTL_MAX` | `300` | 全局/AI 应答 TTL 上限（秒） |
+| `ROS_ADDRLIST_SYNC_BUDGET_MS` | `80` | 新 IP 同步写入的等待上限，超时先应答 |
 | `ENABLE_ROS_SYNC` | `0` | 默认关闭。关闭时无需填写 `ROS_HOST`/`ROS_USER`/`ROS_PASS`/`SYNC_AI_*`，不启动同步、不报错不告警。仅 `=1` 时才校验 `ROS_HOST` 与 `ROS_PASS`；缺则打一条错误并只禁用同步，DNS 照常 |
 | `TZ` | `Asia/Shanghai` | 容器本地时区；规则按本地时间每日 04:30 检查 |
 
@@ -298,32 +303,27 @@ scp mosdns-arm64.tar szhome-pub:
 
 - 实测：启动后内存约 38MiB；baidu 返回国内地址，google、chatgpt 返回境外地址，gitea/reg/gitlab 返回 `192.168.88.252`；停止再启动后规则保留、解析正常。
 - 规则源可达性（从 ROS 出口实测，三个源都能下载 `gfw-domains.txt`）：gh-proxy 镜像、GitHub 直连、Gitea。
-- **CN 路由走 pppoe**：见下方「按 IP 段分流」一节（`Update_CN_Routes` 导入约 6190 条，每天 11:30 更新；默认路由已改为经隧道）。
+- **现行分流**见下方「2026-11-13」。11 月 9 日的国内明细路由和默认走隧道已经撤掉。
 - 内网固定解析：reg/gitea/gitlab 三条 A 记录已写入本仓库 `rules/custom-hosts.txt`，由容器每 120 秒从 Gitea 同步。该文件是 szhome 专用；其它站点共用前须先拆分。
 
-### szhome 当前分流方式：按 IP 段（2026-11-09 完成）
+### szhome 当前分流（2026-11-13）
 
-DNS 全部由 mosdns 解析，RouterOS 只做转发和路由，不再按域名分流：
+默认出口是电信。境外地址不再靠国内明细路由的「反面」送进隧道，而是由本仓库的 `ros_addrlist` 按解析结果写入 `gfw-proxy`。
 
-- `/ip dns servers=192.168.88.222,119.29.29.29`（119 仅作容器故障时的备用）；ROS 上只保留 3 条内网 A 记录（reg/gitea/gitlab → `192.168.88.252`）作兜底，其余域名一律转发，**不再有 FWD 静态记录**，也不再有 `gfw-proxy` 地址列表、`update-dns-static` 脚本和对应 mangle 规则。
-- **国内 IP 走 pppoe**：`Update_CN_Routes` 导入约 6190 条 `comment=CN` 的路由（网关 `pppoe-cn`），`daily_cn_routes` 每天 11:30 更新（晚于 GitHub 定时构建的实际运行时间）。更新时脚本先下载、校验大小再替换，失败则保留旧路由。
-- **其余全部走隧道**：新增默认路由 `0.0.0.0/0 via ovpn-szof distance=1`；原 pppoe 默认路由（distance=2）保留作隧道故障时的退路。
-- 必须直连的地址保持显式路由：隧道端点 `183.56.180.152/32`、`cloud2.mikrotik.com` 的两个网段、`125.94.54.0/27` 走 pppoe；`8.8.8.8/32`、`1.1.1.1/32` 走隧道（供 `DNS_GLOBAL`）。
-- **入站回包保护**：默认路由改到隧道后，从公网进来的连接（dst-nat 的 NAS 端口、ROS 自身的 ssh/winbox）回包必须仍走 pppoe，否则来自境外的访问会因源地址不对而失败。为此新增路由表 `rt-wan`（默认 via `pppoe-cn`）和 3 条 mangle：入站 `pppoe-cn` 的新连接打 `cm-wan-in`，来自 LAN（dst-nat 回包）和路由器自身（output）的回包按该标记走 `rt-wan`。
-- **QUIC**：`forward` 里把「丢弃 udp/443」规则改为 `out-interface=ovpn-szof`，避免浏览器在 TCP 隧道上跑 QUIC。
-- 验证：国内站点直连（访问耗时几十毫秒，大文件约 43MB/s，不走隧道）；境外站点经隧道（单连接约 30 Mbit/s）。
+- `/ip dns set servers=192.168.88.222 cache-max-ttl=2m`。DHCP 把客户端指到 `192.168.88.254`，由路由器转发到容器。不把 `119.29.29.29` 放进 `servers`，否则部分查询会绕过 mosdns，IP 不会进地址池。
+- 容器环境变量列表只有 `ENV_MOSDNS`。开启地址池时增加 `ENABLE_ROS_ADDRLIST=1`、`ROS_ADDRLIST_URL=http://192.168.88.254`、`ROS_USER=mosdns`、`ROS_PASS`、`ROS_ADDRLIST_TIMEOUT=5m`。镜像标签 `jeffok/mosdns:ros-addrlist`，`root-dir=mosdns/root-ros`。`ros_tag` / `ros_confirm` 必须写在引用它们的 sequence 之前。
+- RouterOS 用户 `mosdns` 限制来源 `192.168.88.222/32`。组策略要有 `read,write,api,rest-api`；只有 `rest-api` 没有 `api` 时 HTTP 500。
+- 没有 `comment=CN` 的路由，也没有 `daily_cn_routes`。没有 `rt-wan`。`8.8.8.8/32` 与 `1.1.1.1/32` 仍走 `ovpn-szof`。
+- mangle：`br-lan` 上目的属于 `gfw-proxy` 的新连接打 `cm-ovpn`，再按连接标记送入 `rt-ovpn`。QUIC 不再单独丢弃，UDP/443 跟连接进隧道。隧道是 TCP，QUIC 能通，但比原生 UDP 差。
+- IPv6 在 szhome 上关闭（`disable-ipv6=yes`）。
+- 验证：`www.google.com` 等境外名写入 `gfw-proxy` 且租约约 5 分钟；百度等国内名不写入。LAN 访问已入池地址的连接标记为 `cm-ovpn`。路由器自己的 ping 不走这两条 mangle。
 
 已知取舍：
 
-- 所有境外流量都经办公室出口；实测办公室到 szhome 方向单连接约 20 到 25 Mbit/s，szhome 到办公室约 52 Mbit/s，大流量下载会受限于此。
-- 隧道故障时流量自动退回 pppoe 直连，被墙站点会不通，国内不受影响。
-- 入站回包保护只在本机验证了「路由器自身回包」一条（互联网扫描器的 ICMP 已走 `rt-wan`）；来自境外的 dst-nat 访问需要境外客户端实测。
-
-回退（切换前的完整导出在 ROS 上：`full-before-ipsplit-20261109.rsc`、`dns-before-cutover-20261109.rsc`）：
-
-1. 删除默认路由 `via ovpn-szof distance=1`（注释 `default via szof OVPN`），流量回到 pppoe。
-2. 若还要恢复按域名分流：用 `full-before-ipsplit-20261109.rsc` 中的 FWD、地址列表、`update-dns-static` 脚本、mangle（`OVPN-proxy`）与 `rt-ovpn` 路由表恢复（FWD 的 `forward-to` 当时已是 `192.168.88.222`）。
-3. 仅回退 DNS：`/ip dns set servers=119.29.29.29,114.114.114.114`。
+- 经全局路径的境外地址走办公室出口，上行大约 25 Mbit/s。
+- 地址池租约 5 分钟，路由器 DNS 缓存 2 分钟。客户端如果自己把解析结果存得更久，新连接会在条目过期后走电信。
+- 不经过 mosdns 的解析（DoH、Private Relay、直接使用 IP）不会进地址池。
+- 11 月 9 日切换前的导出已经从路由器文件列表清掉，不能再靠那些 rsc 回退。回退默认出口时重新加上 `0.0.0.0/0 gateway=ovpn-szof distance=1 routing-table=main`；国内流量会一起进隧道，因为明细路由已经删除。
 
 ### 回退
 

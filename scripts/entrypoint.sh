@@ -179,7 +179,7 @@ render_config() {
       else
         ROS_USER="${ROS_USER:-admin}"
         ROS_ADDRLIST_LIST="${ROS_ADDRLIST_LIST:-gfw-proxy}"
-        ROS_ADDRLIST_TIMEOUT="${ROS_ADDRLIST_TIMEOUT:-1h}"
+        ROS_ADDRLIST_TIMEOUT="${ROS_ADDRLIST_TIMEOUT:-5m}"
         ROS_ADDRLIST_SYNC_BUDGET_MS="${ROS_ADDRLIST_SYNC_BUDGET_MS:-80}"
         ROS_ADDRLIST_CONCURRENCY="${ROS_ADDRLIST_CONCURRENCY:-4}"
         ROS_ADDRLIST_QUEUE="${ROS_ADDRLIST_QUEUE:-1024}"
@@ -191,7 +191,7 @@ render_config() {
         ROS_TAG_EXEC=$(printf '%s\n' \
           "  - exec: ttl 0-${ROS_ADDRLIST_TTL_MAX}" \
           '  - exec: $ros_tag')
-        ROS_ADDRLIST_PLUGIN=$(printf '%s\n' \
+        ROS_TAG_PLUGINS=$(printf '%s\n' \
           '- tag: ros_tag' \
           '  type: ros_addrlist' \
           '  args:' \
@@ -213,7 +213,8 @@ render_config() {
           "    sync_budget: ${ROS_ADDRLIST_SYNC_BUDGET_MS}ms" \
           "    concurrency: ${ROS_ADDRLIST_CONCURRENCY}" \
           "    queue: ${ROS_ADDRLIST_QUEUE}" \
-          "    cn_ip_file: ${ROS_CN_FILE}" \
+          "    cn_ip_file: ${ROS_CN_FILE}")
+        ROS_ADDRLIST_PLUGIN=$(printf '%s\n' \
           '- tag: main_entry' \
           '  type: sequence' \
           '  args:' \
@@ -257,6 +258,8 @@ render_config() {
   printf '%s\n' "$UPSTREAMS_AI" > "$blockdir/UPSTREAMS_AI"
   : > "$blockdir/DOH_PLUGIN"
   [ -n "$DOH_PLUGIN" ] && printf '%s\n' "$DOH_PLUGIN" > "$blockdir/DOH_PLUGIN"
+  : > "$blockdir/ROS_TAG_PLUGINS"
+  [ -n "${ROS_TAG_PLUGINS:-}" ] && printf '%s\n' "$ROS_TAG_PLUGINS" > "$blockdir/ROS_TAG_PLUGINS"
   : > "$blockdir/ROS_ADDRLIST_PLUGIN"
   [ -n "$ROS_ADDRLIST_PLUGIN" ] && printf '%s\n' "$ROS_ADDRLIST_PLUGIN" > "$blockdir/ROS_ADDRLIST_PLUGIN"
   : > "$blockdir/ROS_TAG_EXEC"
@@ -305,6 +308,7 @@ render_config() {
     /^%UPSTREAMS_GLOBAL%$/  { block("UPSTREAMS_GLOBAL"); next }
     /^%UPSTREAMS_AI%$/      { block("UPSTREAMS_AI"); next }
     /^%DOH_PLUGIN%$/        { block("DOH_PLUGIN"); next }
+    /^%ROS_TAG_PLUGINS%$/   { block("ROS_TAG_PLUGINS"); next }
     /^%ROS_ADDRLIST_PLUGIN%$/ { block("ROS_ADDRLIST_PLUGIN"); next }
     /^%ROS_TAG_EXEC%$/      { block("ROS_TAG_EXEC"); next }
     {

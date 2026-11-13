@@ -227,7 +227,7 @@ func newConfirm(a *Args) (*confirmPlugin, error) {
 	if list == "" {
 		list = "gfw-proxy"
 	}
-	timeout, err := time.ParseDuration(defaultStr(a.Timeout, "1h"))
+	timeout, err := time.ParseDuration(defaultStr(a.Timeout, "5m"))
 	if err != nil {
 		return nil, fmt.Errorf("timeout: %w", err)
 	}
@@ -252,7 +252,7 @@ func newConfirm(a *Args) (*confirmPlugin, error) {
 		client:     newROSClient(a.Server, user, pass, list),
 		cn:         cn,
 		timeout:    timeout,
-		rosTimeout: defaultStr(a.Timeout, "1h"),
+		rosTimeout: defaultStr(a.Timeout, "5m"),
 		budget:     budget,
 		sem:        make(chan struct{}, n),
 		queue:      make(chan writeJob, qlen),

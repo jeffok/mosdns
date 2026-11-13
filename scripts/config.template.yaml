@@ -140,6 +140,8 @@ plugins:
   - exec: $forward_cn
   - exec: $filter_cn_resp
 ######################## 全球路径（经隧道） ########################
+# ros_tag / ros_confirm 必须先于引用它们的 sequence 定义。
+%ROS_TAG_PLUGINS%
 - tag: global_sequence
   type: sequence
   args:
@@ -260,8 +262,8 @@ plugins:
     exec: accept
   - exec: $fallback_unknown
 ######################## 服务入口 ########################
-# ENABLE_ROS_ADDRLIST=1 时，这里插入 ros_tag / ros_confirm / main_entry。
-# main_entry 先跑 main_sequence（其中 accept 只结束内层），再做地址池确认。
+# ENABLE_ROS_ADDRLIST=1 时，这里插入 main_entry。
+# 它先跑 main_sequence（其中 accept 只结束内层），再做地址池确认。
 %ROS_ADDRLIST_PLUGIN%
 - tag: udp_server
   type: udp_server
