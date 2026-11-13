@@ -20,7 +20,8 @@ mosdns.log
 .env
 certs/
 
-# 开发环境
+# 上游源码缓存（tools/build-mosdns.sh）
+.cache/
 .venv/
 __pycache__/
 

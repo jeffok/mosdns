@@ -1,7 +1,23 @@
 # mosdns v2 运行镜像
-#   - 基础镜像锁 digest（v5.3.4；digest 是 multi-arch index，构建时按目标平台自动选择）
+#   - 第一阶段在构建机原生架构编译带 ros_addrlist 的 v5.3.4（commit 固定）
+#   - 单元测试不带目标 GOOS/GOARCH；只有 go build 交叉编译
+#   - 运行阶段仍用官方镜像，只替换二进制
 #   - 构建期预热 ASN-China 规则：必需文件失败即构建失败；可选文件（cn-exceptions/apple-cn）缺失只告警
+FROM --platform=$BUILDPLATFORM golang:1.24 AS mosdns-build
+ARG MOSDNS_REF=v5.3.4
+ARG MOSDNS_COMMIT=b7323188bab1ea742538aeccb31b692bc4967d1b
+ARG TARGETOS TARGETARCH TARGETVARIANT
+ENV MOSDNS_REF=$MOSDNS_REF MOSDNS_COMMIT=$MOSDNS_COMMIT
+COPY plugins/ /src/plugins/
+COPY tools/build-mosdns.sh /src/tools/build-mosdns.sh
+WORKDIR /src
+RUN sh /src/tools/build-mosdns.sh prepare
+RUN cd /src/.cache/mosdns-upstream && go test ./plugin/executable/ros_addrlist/
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    OUT=/out/mosdns sh /src/tools/build-mosdns.sh build
+
 FROM irinesistiana/mosdns:v5.3.4@sha256:26bd5326578f6b1121dc8a503b30fd4edeedb41a409442b20e6f186e4386c4a4
+COPY --from=mosdns-build /out/mosdns /usr/bin/mosdns
 
 RUN apk add --no-cache tzdata \
  && rm -rf /var/cache/apk/* /tmp/*

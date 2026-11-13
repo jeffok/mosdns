@@ -168,6 +168,62 @@ render_config() {
   UPSTREAMS_GLOBAL=$(dns_to_yaml "$DNS_GLOBAL")
   UPSTREAMS_AI=$(dns_to_yaml "$DNS_AI")
 
+  # 默认关闭：入口仍是 main_sequence，不渲染 ros_addrlist。
+  DNS_ENTRY_SEQUENCE="main_sequence"
+  ROS_ADDRLIST_PLUGIN=""
+  ROS_TAG_EXEC=""
+  case "${ENABLE_ROS_ADDRLIST:-0}" in
+    1|true|yes)
+      if [ -z "${ROS_ADDRLIST_URL:-}" ] || [ -z "${ROS_PASS:-}" ]; then
+        log "ERROR ENABLE_ROS_ADDRLIST=1 但缺少 ROS_ADDRLIST_URL 或 ROS_PASS，已关闭地址池写入；DNS 服务不受影响"
+      else
+        ROS_USER="${ROS_USER:-admin}"
+        ROS_ADDRLIST_LIST="${ROS_ADDRLIST_LIST:-gfw-proxy}"
+        ROS_ADDRLIST_TIMEOUT="${ROS_ADDRLIST_TIMEOUT:-1h}"
+        ROS_ADDRLIST_SYNC_BUDGET_MS="${ROS_ADDRLIST_SYNC_BUDGET_MS:-80}"
+        ROS_ADDRLIST_CONCURRENCY="${ROS_ADDRLIST_CONCURRENCY:-4}"
+        ROS_ADDRLIST_QUEUE="${ROS_ADDRLIST_QUEUE:-1024}"
+        ROS_ADDRLIST_TTL_MAX="${ROS_ADDRLIST_TTL_MAX:-300}"
+        ROS_ADDRLIST_SOURCE_TTL="${ROS_ADDRLIST_SOURCE_TTL:-600s}"
+        ROS_CN_FILE="${RULES_DIR:-/etc/mosdns/rules}/IPv4.China.list"
+        ROS_STATE_FILE="${STATE_DIR:-/data/state}/ros_source.json"
+        DNS_ENTRY_SEQUENCE="main_entry"
+        ROS_TAG_EXEC=$(printf '%s\n' \
+          "  - exec: ttl 0-${ROS_ADDRLIST_TTL_MAX}" \
+          '  - exec: $ros_tag')
+        ROS_ADDRLIST_PLUGIN=$(printf '%s\n' \
+          '- tag: ros_tag' \
+          '  type: ros_addrlist' \
+          '  args:' \
+          '    mode: tag' \
+          '    source_key: gfw' \
+          "    source_ttl: ${ROS_ADDRLIST_SOURCE_TTL}" \
+          "    state_file: ${ROS_STATE_FILE}" \
+          '- tag: ros_confirm' \
+          '  type: ros_addrlist' \
+          '  args:' \
+          '    mode: confirm' \
+          '    source_key: gfw' \
+          "    state_file: ${ROS_STATE_FILE}" \
+          "    server: ${ROS_ADDRLIST_URL}" \
+          "    user: ${ROS_USER}" \
+          '    passwd_env: ROS_PASS' \
+          "    addrlist: ${ROS_ADDRLIST_LIST}" \
+          "    timeout: ${ROS_ADDRLIST_TIMEOUT}" \
+          "    sync_budget: ${ROS_ADDRLIST_SYNC_BUDGET_MS}ms" \
+          "    concurrency: ${ROS_ADDRLIST_CONCURRENCY}" \
+          "    queue: ${ROS_ADDRLIST_QUEUE}" \
+          "    cn_ip_file: ${ROS_CN_FILE}" \
+          '- tag: main_entry' \
+          '  type: sequence' \
+          '  args:' \
+          '  - exec: $main_sequence' \
+          '  - exec: $ros_confirm')
+        log "ros_addrlist enabled list=${ROS_ADDRLIST_LIST} user=${ROS_USER}"
+      fi
+      ;;
+  esac
+
   DOH_PLUGIN=""
   case "${DOH_ENABLED:-0}" in
     1|true|yes)
@@ -181,7 +237,7 @@ render_config() {
           '  args:' \
           '    entries:' \
           '    - path: /dns-query' \
-          '      exec: main_sequence' \
+          "      exec: \$$DNS_ENTRY_SEQUENCE" \
           "    listen: $DOH_LISTEN" \
           "    cert: $DOH_CERT" \
           "    key: $DOH_KEY" \
@@ -201,6 +257,10 @@ render_config() {
   printf '%s\n' "$UPSTREAMS_AI" > "$blockdir/UPSTREAMS_AI"
   : > "$blockdir/DOH_PLUGIN"
   [ -n "$DOH_PLUGIN" ] && printf '%s\n' "$DOH_PLUGIN" > "$blockdir/DOH_PLUGIN"
+  : > "$blockdir/ROS_ADDRLIST_PLUGIN"
+  [ -n "$ROS_ADDRLIST_PLUGIN" ] && printf '%s\n' "$ROS_ADDRLIST_PLUGIN" > "$blockdir/ROS_ADDRLIST_PLUGIN"
+  : > "$blockdir/ROS_TAG_EXEC"
+  [ -n "$ROS_TAG_EXEC" ] && printf '%s\n' "$ROS_TAG_EXEC" > "$blockdir/ROS_TAG_EXEC"
 
   # 标量值（含引号转义）：整体替换 %NAME%
   : > "$blockdir/scalars"
@@ -223,6 +283,7 @@ render_config() {
   set_scalar LAZY_CACHE_TTL "$LAZY_CACHE_TTL"
   set_scalar CACHE_DUMP_INTERVAL "$CACHE_DUMP_INTERVAL"
   set_scalar CACHE_DUMP_FILE "$CACHE_DUMP_FILE"
+  set_scalar DNS_ENTRY_SEQUENCE "$DNS_ENTRY_SEQUENCE"
   set_scalar DOH_LISTEN "${DOH_LISTEN:-}"
   set_scalar DOH_CERT "${DOH_CERT:-}"
   set_scalar DOH_KEY "${DOH_KEY:-}"
@@ -244,6 +305,8 @@ render_config() {
     /^%UPSTREAMS_GLOBAL%$/  { block("UPSTREAMS_GLOBAL"); next }
     /^%UPSTREAMS_AI%$/      { block("UPSTREAMS_AI"); next }
     /^%DOH_PLUGIN%$/        { block("DOH_PLUGIN"); next }
+    /^%ROS_ADDRLIST_PLUGIN%$/ { block("ROS_ADDRLIST_PLUGIN"); next }
+    /^%ROS_TAG_EXEC%$/      { block("ROS_TAG_EXEC"); next }
     {
       line = $0
       out = ""
@@ -544,6 +607,9 @@ else
   log "restored last known good rules before starting mosdns"
 fi
 render_config || { warn "config render failed"; exit 1; }
+if [ "${RENDER_ONLY:-0}" = 1 ]; then
+  exit 0
+fi
 if ! check_config_files; then
   warn "some rule files still missing after init; mosdns may fail to start"
 fi

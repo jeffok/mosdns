@@ -145,11 +145,13 @@ plugins:
   args:
   - exec: $ecs_handler
   - exec: $forward_global
+%ROS_TAG_EXEC%
 - tag: ai_sequence
   type: sequence
   args:
   - exec: $ecs_handler
   - exec: $forward_ai
+%ROS_TAG_EXEC%
 ######################## D3：未知域名/软名单 ########################
 # cn_first    ：先国内，应答通过接受集才采信；否则取全球（默认）
 # global_first：先全球，丢弃落在 CN 段的应答；否则取国内（现状行为）
@@ -258,14 +260,17 @@ plugins:
     exec: accept
   - exec: $fallback_unknown
 ######################## 服务入口 ########################
+# ENABLE_ROS_ADDRLIST=1 时，这里插入 ros_tag / ros_confirm / main_entry。
+# main_entry 先跑 main_sequence（其中 accept 只结束内层），再做地址池确认。
+%ROS_ADDRLIST_PLUGIN%
 - tag: udp_server
   type: udp_server
   args:
-    entry: main_sequence
+    entry: %DNS_ENTRY_SEQUENCE%
     listen: %DNS_ENTRY_LISTEN%
 - tag: tcp_server
   type: tcp_server
   args:
-    entry: main_sequence
+    entry: %DNS_ENTRY_SEQUENCE%
     listen: %DNS_ENTRY_LISTEN%
 %DOH_PLUGIN%

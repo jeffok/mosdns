@@ -54,8 +54,17 @@ Compose 使用 host 网络，监听地址默认为 `0.0.0.0:53`。请确保主�
 | `CANARY_PORT` / `CANARY_API` / `CANARY_SENTINEL` | `15353` / `19091` / `www.baidu.com` | 更新前金丝雀检查参数 |
 | `RESTART_TIMEOUT` | `20` 秒 | 规则应用后的健康检查等待时间 |
 | `DOH_ENABLED` / `DOH_CERT` / `DOH_KEY` / `DOH_LISTEN` | `0` / 默认证书路径 / 默认私钥路径 / `0.0.0.0:8443` | 可选 DoH 服务配置 |
+| `ENABLE_ROS_ADDRLIST` | `0` | 默认关闭。`=1` 时把最终应答里来自全局/AI 路径、且不在国内 IP 表的 IPv4 写入 RouterOS 地址池。缺 `ROS_ADDRLIST_URL` 或 `ROS_PASS` 时打一条错误并关闭插件，DNS 照常。只用 HTTP |
 | `ENABLE_ROS_SYNC` | `0` | 默认关闭。关闭时无需填写 `ROS_HOST`/`ROS_USER`/`ROS_PASS`/`SYNC_AI_*`，不启动同步、不报错不告警。仅 `=1` 时才校验 `ROS_HOST` 与 `ROS_PASS`；缺则打一条错误并只禁用同步，DNS 照常 |
 | `TZ` | `Asia/Shanghai` | 容器本地时区；规则按本地时间每日 04:30 检查 |
+
+## 全局路径地址池（ENABLE_ROS_ADDRLIST）
+
+默认关闭，与 `ENABLE_ROS_SYNC` 互不影响。开启后入口从 `main_sequence` 改为 `main_entry`：先完成原来的解析（含 fallback 选择和缓存），再由 `ros_confirm` 逐个检查最终应答里的 IPv4。只有被 `ros_tag` 记为来自全局或 AI 路径、且不在 `IPv4.China.list` 里的地址才会写入 `gfw-proxy`。
+
+国内路径不经过 `ros_tag`。fallback 没被选中的分支只记在内存来源表，不会写 RouterOS。新 IP 同步等待默认 80ms，超时先返回应答，写入在后台继续。已有租约的刷新不阻塞应答。密码从 `ROS_PASS` 读取，不写入渲染后的配置。`ROS_USER` 可以是专用账号，也可以是 `admin`。
+
+传输只用 HTTP。RouterOS 的 `write` 权限不能限定到某一个地址池。
 
 ## AI 域名走特定出口（ENABLE_ROS_SYNC）
 
