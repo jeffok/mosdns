@@ -172,7 +172,8 @@ RB5009UG+S+，RouterOS 7.24.6，无外置盘。容器与 LAN 同网段。
 /container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_URL value="http://192.168.88.254"
 /container envs add list=ENV_MOSDNS key=ROS_USER value="mosdns"
 /container envs add list=ENV_MOSDNS key=ROS_PASS value="<密码>"
-/container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_TIMEOUT value="5m"
+/container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_TIMEOUT value="30m"
+/container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_SYNC_BUDGET_MS value="300"
 ```
 
 `ROS_PASS` 只放在路由器的环境变量里。`/container envs print` 和容器日志会显示它，不要把输出提交到仓库。
@@ -190,14 +191,14 @@ RB5009UG+S+，RouterOS 7.24.6，无外置盘。容器与 LAN 同网段。
 /ip dns set servers=192.168.88.222 cache-max-ttl=2m allow-remote-requests=yes
 ```
 
-DHCP 的 `dns-server` 仍是 `192.168.88.254`，由路由器转发到容器。`servers` 不要再加 `119.29.29.29`，否则一部分查询不经过 mosdns，地址不会进地址池。`cache-max-ttl=2m` 短于地址池租约 5 分钟。
+DHCP 的 `dns-server` 仍是 `192.168.88.254`，由路由器转发到容器。`servers` 不要再加 `119.29.29.29`，否则一部分查询不经过 mosdns，地址不会进地址池。`cache-max-ttl=2m`。地址池租约 30 分钟，新地址同步写入最多等 300 毫秒，避免应答先于路由出去。
 
 分流：
 
 | 流量 | 出口 |
 | --- | --- |
 | 国内路径，以及没有写入 `gfw-proxy` 的地址 | 默认路由 `pppoe-cn` |
-| 全局/AI 路径的非国内 IPv4 | `gfw-proxy`，comment 前缀 `mosdns-dyn`，租约 5 分钟；`br-lan` 新连接标记 `cm-ovpn`，走 `rt-ovpn` → `ovpn-szof` |
+| 全局/AI 路径的非国内 IPv4 | `gfw-proxy`，comment 前缀 `mosdns-dyn`，租约 30 分钟；`br-lan` 新连接标记 `cm-ovpn`，走 `rt-ovpn` → `ovpn-szof` |
 | `gitea` / `reg` / `gitlab.jeffok.com` | `192.168.88.252`，来自 `custom-hosts.txt` |
 
 `8.8.8.8/32` 和 `1.1.1.1/32` 走 `ovpn-szof`，供 `DNS_GLOBAL` 使用。隧道端点 `183.56.180.152/32` 走 `pppoe-cn`。`rt-ovpn` 的默认路由是 `ovpn-szof`。地址池保留占位 `255.255.255.255`（comment `gfw-proxy-keep`）。
@@ -216,7 +217,7 @@ mangle 只匹配从 `br-lan` 进入的新连接，路由器自己发出的包不
 :put [:resolve www.google.com server=192.168.88.222]
 ```
 
-国内名不出现在 `gfw-proxy`。`www.google.com` 的地址以 `mosdns-dyn` 写入，租约约 5 分钟。清缓存后再解析，否则看到的是路由器缓存，不会触发写入。
+国内名不出现在 `gfw-proxy`。`www.github.com` 的地址以 `mosdns-dyn` 写入，租约约 30 分钟。清缓存后再解析，否则看到的是路由器缓存，不会触发写入。
 
 DoH、加密 DNS 或 Private Relay 不经过这台 mosdns，对应地址不会进地址池。
 
