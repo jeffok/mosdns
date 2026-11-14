@@ -1,0 +1,30 @@
+{
+  "local_ip": "192.168.88.223",
+  "peer_ip": "192.168.88.254",
+  "asn": 64513,
+  "peer_asn": 64512,
+  "next_hop": "192.168.88.223",
+  "dns_listen": "0.0.0.0:53",
+  "http_listen": "0.0.0.0:9080",
+  "upstreams": ["8.8.8.8:53", "1.1.1.1:53"],
+  "warm_domains": [
+    "github.com",
+    "api.github.com",
+    "github.githubassets.com",
+    "avatars.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "www.google.com",
+    "accounts.google.com",
+    "www.gstatic.com",
+    "www.youtube.com",
+    "i.ytimg.com"
+  ],
+  "cn_file": "/etc/bgp-agent/IPv4.China.list",
+  "state_file": "/data/routes.json",
+  "ttl_max": 300,
+  "retain_seconds": 86400,
+  "confirm_ms": 2500,
+  "ack_max_age_ms": 3000,
+  "max_routes": 512,
+  "gc_dry_run": true
+}

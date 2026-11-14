@@ -37,3 +37,6 @@ openresty/
 data/
 tests/runtime/
 tests/.runtime/
+
+# Local BGP validation executable; image archives live under .cache/.
+/bgp-agent/bgp-agent
