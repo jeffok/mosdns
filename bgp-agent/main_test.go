@@ -328,6 +328,231 @@ func TestCapacityRejectsNewRoutesWithoutEvictingExisting(t *testing.T) {
 	}
 }
 
+func TestWholeAnswerCapacityIsCheckedBeforePublication(t *testing.T) {
+	a, pub := testApp(t)
+	a.cfg.MaxRoutes = 1
+	err := a.ensure(context.Background(), "two.example.", []netip.Addr{
+		netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("8.8.4.4"),
+	}, 60, true)
+	if err == nil || !strings.Contains(err.Error(), "route capacity reached") {
+		t.Fatalf("expected capacity rejection, got %v", err)
+	}
+	if n, _ := pub.counts(); n != 0 {
+		t.Fatalf("partially published %d routes", n)
+	}
+}
+
+func TestAnsweredRouteIsPersistedBeforeEnsureReturns(t *testing.T) {
+	a, pub := testApp(t)
+	result := make(chan error, 1)
+	go func() {
+		result <- a.ensure(context.Background(), "recover.example.", []netip.Addr{netip.MustParseAddr("8.8.8.8")}, 60, true)
+	}()
+	select {
+	case <-pub.notify:
+	case <-time.After(time.Second):
+		t.Fatal("publish timed out")
+	}
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	// Simulate process loss: create a new app directly from disk, without a
+	// graceful shutdown or an explicit save on the old process.
+	p := &fakePublication{}
+	recovered, err := newApp(a.cfg, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := p.counts(); n != 1 {
+		t.Fatalf("replayed %d routes, want 1", n)
+	}
+	r := recovered.routes["8.8.8.8/32"]
+	if r == nil || !r.AnswerUntil.After(time.Now()) {
+		t.Fatalf("missing durable answer lease: %+v", r)
+	}
+	if !r.AckAt.IsZero() {
+		t.Fatal("restart reused stale route acknowledgement")
+	}
+}
+
+func TestNewGenerationCannotReuseOldDurableLease(t *testing.T) {
+	a, pub := testApp(t)
+	const prefix = "8.8.8.8/32"
+	// Simulate an old durable entry, e.g. a GC/save race or a wall-clock step.
+	// Even a later old expiry cannot establish durability of the new path.
+	a.durableUntil[prefix] = time.Now().Add(24 * time.Hour)
+	a.durableGeneration[prefix] = 1
+	a.routeGeneration = 1
+	done := make(chan error, 1)
+	go func() {
+		done <- a.ensure(context.Background(), "readded.example.", []netip.Addr{netip.MustParseAddr("8.8.8.8")}, 60, true)
+	}()
+	select {
+	case <-pub.notify:
+	case <-time.After(time.Second):
+		t.Fatal("publish timed out")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		r := a.routes[prefix]
+		a.mu.Unlock()
+		if r != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("route was not installed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := testAcknowledge(a, currentEpoch(a), []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(a.cfg.StateFile); err != nil {
+		t.Fatalf("new generation not persisted: %v", err)
+	}
+}
+
+func TestPersistenceFailurePreventsPositiveAnswer(t *testing.T) {
+	a, pub := testApp(t)
+	a.cfg.StateFile = filepath.Join(t.TempDir(), "missing", "not-a-file")
+	if err := os.MkdirAll(a.cfg.StateFile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- a.ensure(context.Background(), "diskfail.example.", []netip.Addr{netip.MustParseAddr("8.8.8.8")}, 60, true)
+	}()
+	select {
+	case <-pub.notify:
+	case <-time.After(time.Second):
+		t.Fatal("publish timed out")
+	}
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err == nil || !strings.Contains(err.Error(), "persist answered routes") {
+		t.Fatalf("expected persistence failure, got %v", err)
+	}
+}
+
+func TestConfirmEndpointEnforcesSourceAndAddressPolicy(t *testing.T) {
+	a, _ := testApp(t)
+	a.cfg.ConfirmClientIP = "192.168.88.222"
+	a.cfg.Upstreams = append(a.cfg.Upstreams, "1.1.1.1:53")
+	h := a.httpHandler()
+	for _, tc := range []struct {
+		source, body string
+		want         int
+	}{
+		{"192.168.88.65:1234", `{"domain":"test.example.","ips":["8.8.8.8"],"ttl":30}`, 403},
+		{"192.168.88.222:1234", `{"domain":"test.example.","ips":["0.0.0.1"],"ttl":30}`, 400},
+		{"192.168.88.222:1234", `{"domain":"test.example.","ips":["10.0.0.1"],"ttl":30}`, 400},
+		{"192.168.88.222:1234", `{"domain":"test.example.","ips":["1.1.1.1"],"ttl":30}`, 503},
+		{"192.168.88.222:1234", `{"domain":"test.example.","ips":["223.5.5.5","1.1.1.1"],"ttl":30}`, 503},
+		{"192.168.88.222:1234", `{"domain":"test.example.","ips":["8.8.8.8"],"ttl":301}`, 400},
+		{"192.168.88.222:1234", `{"domain":"not-fqdn","ips":["8.8.8.8"],"ttl":30}`, 400},
+		{"192.168.88.222:1234", `{"domain":"test.example.","ips":["223.5.5.5"],"ttl":30}`, 503},
+	} {
+		r := httptest.NewRequest("POST", "/confirm", strings.NewReader(tc.body))
+		r.RemoteAddr = tc.source
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("source=%s body=%s code=%d want=%d", tc.source, tc.body, w.Code, tc.want)
+		}
+	}
+	a.cfg.ConfirmClientIP = ""
+	r := httptest.NewRequest("POST", "/confirm", strings.NewReader("{}"))
+	r.RemoteAddr = "192.168.88.222:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 404 {
+		t.Fatalf("disabled endpoint returned %d", w.Code)
+	}
+}
+
+func TestConfirmEndpointWaitsForAckAndDurableState(t *testing.T) {
+	a, pub := testApp(t)
+	a.cfg.ConfirmClientIP = "192.168.88.222"
+	r := httptest.NewRequest("POST", "/confirm", strings.NewReader(`{"domain":"test.example.","ips":["8.8.8.8"],"ttl":60}`))
+	r.RemoteAddr = "192.168.88.222:1234"
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { a.httpHandler().ServeHTTP(w, r); close(done) }()
+	select {
+	case <-pub.notify:
+	case <-time.After(time.Second):
+		t.Fatal("publish timeout")
+	}
+	select {
+	case <-done:
+		t.Fatal("confirmed before ROS ACK")
+	default:
+	}
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("confirmation timed out")
+	}
+	if w.Code != 204 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	p := &fakePublication{}
+	recovered, err := newApp(a.cfg, p)
+	if err != nil || recovered.routes["8.8.8.8/32"] == nil {
+		t.Fatalf("route not persisted: %v", err)
+	}
+}
+
+func TestHTTPConfirmSurvivesThreeSecondWait(t *testing.T) {
+	a, pub := testApp(t)
+	a.cfg.ConfirmClientIP = "127.0.0.1"
+	a.cfg.ConfirmMS = 4500
+	a.cfg.AckMaxAgeMS = 6000
+	s := httptest.NewUnstartedServer(a.httpHandler())
+	s.Config = newHTTPServer(a.cfg, a.httpHandler())
+	s.Start()
+	t.Cleanup(s.Close)
+	done := make(chan error, 1)
+	go func() {
+		resp, err := s.Client().Post(s.URL+"/confirm", "application/json", strings.NewReader(`{"domain":"wait.example.","ips":["8.8.8.8"],"ttl":60}`))
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				err = fmt.Errorf("unexpected HTTP %d", resp.StatusCode)
+			}
+		}
+		done <- err
+	}()
+	select {
+	case <-pub.notify:
+	case <-time.After(time.Second):
+		t.Fatal("publish timed out")
+	}
+	time.Sleep(3200 * time.Millisecond)
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP confirmation did not return")
+	}
+}
+
 func testDNSUpstream(t *testing.T, ttl uint32) (string, *atomic.Int32) {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -450,6 +675,30 @@ func TestAckHTTPRejectsOtherSourcesAndOldEpoch(t *testing.T) {
 	}
 }
 
+func TestStateHTTPRequiresLoopbackOrConfiguredPeer(t *testing.T) {
+	a, _ := testApp(t)
+	h := a.httpHandler()
+	for _, tc := range []struct {
+		remote string
+		want   int
+	}{
+		{"127.0.0.1:1234", http.StatusOK},
+		{"[::1]:1234", http.StatusOK},
+		{"192.168.88.254:1234", http.StatusOK},
+		{"192.168.88.222:1234", http.StatusForbidden},
+		{"192.168.88.65:1234", http.StatusForbidden},
+		{"invalid", http.StatusForbidden},
+	} {
+		r := httptest.NewRequest("GET", "/state", nil)
+		r.RemoteAddr = tc.remote
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Errorf("remote=%q status=%d want=%d", tc.remote, w.Code, tc.want)
+		}
+	}
+}
+
 func TestFailedPublicationNeverBecomesUsableLease(t *testing.T) {
 	a, pub := testApp(t)
 	pub.addErr = errors.New("BGP RIB rejected path")
@@ -528,12 +777,16 @@ func TestWithdrawAndReaddRejectsPreviousRouteAcknowledgement(t *testing.T) {
 	a.routes["8.8.8.8/32"] = &lease{Prefix: "8.8.8.8/32", UUID: []byte("old-path"), RetainUntil: now.Add(-time.Hour), AnswerUntil: now.Add(-time.Hour), References: map[string]time.Time{}, AckAt: now}
 	a.routes["8.8.4.4/32"] = &lease{Prefix: "8.8.4.4/32", UUID: []byte("kept-path"), RetainUntil: now.Add(time.Hour), References: map[string]time.Time{}, AckAt: now}
 	oldEpoch := currentEpoch(a)
+	_, oldSnapshot, _, err := a.issueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
 	a.gc(now)
 	if _, deletes := pub.counts(); deletes != 1 || a.routes["8.8.8.8/32"] != nil {
 		t.Fatal("old path was not withdrawn")
 	}
-	if currentEpoch(a) == oldEpoch || !a.routes["8.8.4.4/32"].AckAt.IsZero() {
-		t.Fatal("withdraw did not invalidate old snapshot epoch and acknowledgements")
+	if currentEpoch(a) != oldEpoch || !a.routes["8.8.4.4/32"].AckAt.Equal(now) {
+		t.Fatal("withdraw incorrectly invalidated unrelated route acknowledgement")
 	}
 	done := make(chan error, 1)
 	go func() { done <- a.ensure(context.Background(), "github.com.", []netip.Addr{ip}, 300, true) }()
@@ -542,7 +795,7 @@ func TestWithdrawAndReaddRejectsPreviousRouteAcknowledgement(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("withdrawn prefix was not republished")
 	}
-	if err := testAcknowledge(a, oldEpoch, []string{"8.8.8.8/32"}); err == nil {
+	if err := a.acknowledge(oldEpoch, oldSnapshot, []string{"8.8.8.8/32"}); err == nil {
 		t.Fatal("pre-withdraw acknowledgement was accepted for a new path")
 	}
 	select {
@@ -560,6 +813,25 @@ func TestWithdrawAndReaddRejectsPreviousRouteAcknowledgement(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("new path not released by current acknowledgement")
+	}
+}
+
+func TestOlderSnapshotCannotClearNewGenerationAcknowledgement(t *testing.T) {
+	a, _ := testApp(t)
+	now := time.Now()
+	a.routes["8.8.8.8/32"] = &lease{Prefix: "8.8.8.8/32", generation: 1, AckAt: now}
+	epoch, id, _, err := a.issueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A route unknown to this snapshot acquired its own confirmation after it
+	// was issued. Applying the older complete snapshot must not erase it.
+	a.routes["8.8.4.4/32"] = &lease{Prefix: "8.8.4.4/32", generation: 2, AckAt: now}
+	if err := a.acknowledge(epoch, id, []string{"8.8.8.8/32"}); err != nil {
+		t.Fatal(err)
+	}
+	if !a.routes["8.8.4.4/32"].AckAt.Equal(now) {
+		t.Fatal("unseen new generation acknowledgement was cleared")
 	}
 }
 

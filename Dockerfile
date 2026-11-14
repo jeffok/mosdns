@@ -1,5 +1,5 @@
 # mosdns v2 运行镜像
-#   - 第一阶段在构建机原生架构编译带 ros_addrlist 的 v5.3.4（commit 固定）
+#   - 第一阶段在构建机原生架构编译带 ros_bgp 的 v5.3.4（commit 固定）
 #   - 单元测试不带目标 GOOS/GOARCH；只有 go build 交叉编译
 #   - 运行阶段仍用官方镜像，只替换二进制
 #   - 构建期预热 ASN-China 规则：必需文件失败即构建失败；可选文件（cn-exceptions/apple-cn）缺失只告警
@@ -9,17 +9,32 @@ ARG MOSDNS_COMMIT=b7323188bab1ea742538aeccb31b692bc4967d1b
 ARG TARGETOS TARGETARCH TARGETVARIANT
 ENV MOSDNS_REF=$MOSDNS_REF MOSDNS_COMMIT=$MOSDNS_COMMIT
 COPY plugins/ /src/plugins/
+COPY patches/ /src/patches/
 COPY tools/build-mosdns.sh /src/tools/build-mosdns.sh
 WORKDIR /src
 RUN sh /src/tools/build-mosdns.sh prepare
-RUN cd /src/.cache/mosdns-upstream && go test ./plugin/executable/ros_addrlist/
+RUN cd /src/.cache/mosdns-upstream && go test ./plugin/executable/ros_bgp/ ./plugin/executable/sequence/fallback/
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
     OUT=/out/mosdns sh /src/tools/build-mosdns.sh build
 
+# The second build stage compiles the BGP agent natively on BUILDPLATFORM.
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS bgp-build
+WORKDIR /src/bgp-agent
+ENV GOTOOLCHAIN=local CGO_ENABLED=0
+COPY bgp-agent/go.mod bgp-agent/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download && go mod verify
+COPY bgp-agent/*.go ./
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go test ./...
+ARG TARGETOS TARGETARCH TARGETVARIANT
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    go build -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w' -o /out/bgp-agent .
+
 FROM irinesistiana/mosdns:v5.3.4@sha256:26bd5326578f6b1121dc8a503b30fd4edeedb41a409442b20e6f186e4386c4a4
 COPY --from=mosdns-build /out/mosdns /usr/bin/mosdns
+COPY --from=bgp-build /out/bgp-agent /usr/bin/bgp-agent
 
-RUN apk add --no-cache tzdata \
+RUN apk add --no-cache tzdata jq \
  && rm -rf /var/cache/apk/* /tmp/*
 
 COPY scripts/ /opt/mosdns/

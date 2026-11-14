@@ -1,0 +1,70 @@
+diff --git a/pkg/query_context/kv.go b/pkg/query_context/kv.go
+index 0d5824d..d09812c 100644
+--- a/pkg/query_context/kv.go
++++ b/pkg/query_context/kv.go
+@@ -33,3 +33,7 @@ func RegKey() uint32 {
+ 	}
+ 	return i
+ }
++
++// RouteSourceKey associates a response with its selected routing provenance.
++// Values must be immutable so Context.Copy retains safe ownership.
++var RouteSourceKey = RegKey()
+diff --git a/plugin/executable/sequence/fallback/fallback.go b/plugin/executable/sequence/fallback/fallback.go
+index 7145a8f..64834b1 100644
+--- a/plugin/executable/sequence/fallback/fallback.go
++++ b/plugin/executable/sequence/fallback/fallback.go
+@@ -29,7 +29,6 @@ import (
+ 	"github.com/IrineSistiana/mosdns/v5/pkg/pool"
+ 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
+ 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
+-	"github.com/miekg/dns"
+ 	"go.uber.org/zap"
+ )
+ 
+@@ -108,7 +107,7 @@ func (f *fallback) Exec(ctx context.Context, qCtx *query_context.Context) error
+ }
+ 
+ func (f *fallback) doFallback(ctx context.Context, qCtx *query_context.Context) error {
+-	respChan := make(chan *dns.Msg, 2) // resp could be nil.
++	respChan := make(chan *query_context.Context, 2) // resp could be nil.
+ 	primFailed := make(chan struct{})
+ 	primDone := make(chan struct{})
+ 
+@@ -129,7 +128,7 @@ func (f *fallback) doFallback(ctx context.Context, qCtx *query_context.Context)
+ 			respChan <- nil
+ 		} else {
+ 			close(primDone)
+-			respChan <- r
++			respChan <- qCtx
+ 		}
+ 	}()
+ 
+@@ -167,18 +166,23 @@ func (f *fallback) doFallback(ctx context.Context, qCtx *query_context.Context)
+ 			case <-timer.C: // or timed out.
+ 			}
+ 		}
+-		respChan <- r
++		respChan <- qCtx
+ 	}()
+ 
+ 	for i := 0; i < 2; i++ {
+ 		select {
+ 		case <-ctx.Done():
+ 			return context.Cause(ctx)
+-		case r := <-respChan:
+-			if r == nil { // One of goroutines finished but failed.
++		case winner := <-respChan:
++			if winner == nil || winner.R() == nil { // One of goroutines finished but failed.
+ 				continue
+ 			}
+-			qCtx.SetResponse(r)
++			qCtx.SetResponse(winner.R())
++			if source, ok := winner.GetValue(query_context.RouteSourceKey); ok {
++				qCtx.StoreValue(query_context.RouteSourceKey, source)
++			} else {
++				qCtx.DeleteValue(query_context.RouteSourceKey)
++			}
+ 			return nil
+ 		}
+ 	}

@@ -33,26 +33,27 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-const version = "bgp-validation-20261114.1"
+const version = "bgp-unified-20261114.1"
 
 type config struct {
-	LocalIP       string   `json:"local_ip"`
-	PeerIP        string   `json:"peer_ip"`
-	ASN           uint32   `json:"asn"`
-	PeerASN       uint32   `json:"peer_asn"`
-	NextHop       string   `json:"next_hop"`
-	DNSListen     string   `json:"dns_listen"`
-	HTTPListen    string   `json:"http_listen"`
-	Upstreams     []string `json:"upstreams"`
-	Warm          []string `json:"warm_domains"`
-	CNFile        string   `json:"cn_file"`
-	StateFile     string   `json:"state_file"`
-	TTLMax        uint32   `json:"ttl_max"`
-	RetainSeconds int      `json:"retain_seconds"`
-	ConfirmMS     int      `json:"confirm_ms"`
-	AckMaxAgeMS   int      `json:"ack_max_age_ms"`
-	MaxRoutes     int      `json:"max_routes"`
-	GCDryRun      bool     `json:"gc_dry_run"`
+	LocalIP         string   `json:"local_ip"`
+	PeerIP          string   `json:"peer_ip"`
+	ASN             uint32   `json:"asn"`
+	PeerASN         uint32   `json:"peer_asn"`
+	NextHop         string   `json:"next_hop"`
+	DNSListen       string   `json:"dns_listen"`
+	HTTPListen      string   `json:"http_listen"`
+	ConfirmClientIP string   `json:"confirm_client_ip"` // empty disables /confirm
+	Upstreams       []string `json:"upstreams"`
+	Warm            []string `json:"warm_domains"`
+	CNFile          string   `json:"cn_file"`
+	StateFile       string   `json:"state_file"`
+	TTLMax          uint32   `json:"ttl_max"`
+	RetainSeconds   int      `json:"retain_seconds"`
+	ConfirmMS       int      `json:"confirm_ms"`
+	AckMaxAgeMS     int      `json:"ack_max_age_ms"`
+	MaxRoutes       int      `json:"max_routes"`
+	GCDryRun        bool     `json:"gc_dry_run"`
 }
 type lease struct {
 	Prefix      string               `json:"prefix"`
@@ -62,6 +63,7 @@ type lease struct {
 	References  map[string]time.Time `json:"references"`
 	AckAt       time.Time            `json:"ack_at,omitempty"`
 	UUID        []byte               `json:"-"`
+	generation  uint64
 }
 type cached struct {
 	msg             *dns.Msg
@@ -71,7 +73,7 @@ type routeSnapshot struct {
 	epoch    string
 	issued   time.Time // retains Go's monotonic clock reading
 	sequence uint64
-	prefixes map[string]struct{}
+	prefixes map[string]uint64
 }
 type publication interface {
 	Add(string) ([]byte, error)
@@ -114,10 +116,13 @@ type app struct {
 	slots                                      chan struct{}
 	dirty                                      bool
 	routes                                     map[string]*lease
+	durableUntil                               map[string]time.Time
+	durableGeneration                          map[string]uint64
 	cache                                      map[string]cached
 	epoch                                      string
 	snapshots                                  map[string]routeSnapshot
 	snapshotSequence, lastAppliedSnapshot      uint64
+	routeGeneration                            uint64
 	up                                         bool
 	pub                                        publication
 	cn                                         []netip.Prefix
@@ -135,7 +140,7 @@ func token() string {
 	return hex.EncodeToString(b)
 }
 func newApp(c config, p publication) (*app, error) {
-	if c.TTLMax == 0 || c.TTLMax > 300 || c.RetainSeconds < 300 || c.ConfirmMS < 1 || c.AckMaxAgeMS < 1 || c.MaxRoutes < 1 {
+	if c.TTLMax == 0 || c.TTLMax > 300 || c.RetainSeconds < 300 || c.ConfirmMS < 1 || c.ConfirmMS > 30000 || c.AckMaxAgeMS < 1 || c.MaxRoutes < 1 {
 		return nil, errors.New("invalid TTL/retention/confirmation/capacity configuration")
 	}
 	if len(c.Warm) > 32 || len(c.Upstreams) > 3 {
@@ -144,12 +149,18 @@ func newApp(c config, p publication) (*app, error) {
 	if len(c.Upstreams) == 0 {
 		return nil, errors.New("upstreams required")
 	}
+	if c.ConfirmClientIP != "" {
+		ip, err := netip.ParseAddr(c.ConfirmClientIP)
+		if err != nil || !ip.Is4() || ip.IsUnspecified() {
+			return nil, errors.New("invalid confirm_client_ip")
+		}
+	}
 	for _, s := range c.Upstreams {
 		if _, e := netip.ParseAddrPort(s); e != nil {
 			return nil, e
 		}
 	}
-	a := &app{cfg: c, routes: map[string]*lease{}, cache: map[string]cached{}, snapshots: map[string]routeSnapshot{}, epoch: token(), pub: p, stop: make(chan struct{})}
+	a := &app{cfg: c, routes: map[string]*lease{}, durableUntil: map[string]time.Time{}, durableGeneration: map[string]uint64{}, cache: map[string]cached{}, snapshots: map[string]routeSnapshot{}, epoch: token(), pub: p, stop: make(chan struct{})}
 	b, e := os.ReadFile(c.CNFile)
 	if e != nil {
 		return nil, e
@@ -188,15 +199,28 @@ func newApp(c config, p publication) (*app, error) {
 				return nil, e
 			}
 			r.UUID = id
+			a.routeGeneration++
+			r.generation = a.routeGeneration
 			if r.References == nil {
 				r.References = map[string]time.Time{}
 			}
 			a.routes[r.Prefix] = &r
+			a.durableUntil[r.Prefix] = r.AnswerUntil
+			a.durableGeneration[r.Prefix] = r.generation
 		}
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	}
 	return a, nil
+}
+
+// The HTTP write deadline starts after reading request headers and covers the
+// remainder of the request and handler. Allow a bounded body-read window and
+// the configured route-confirmation budget, rather than cutting a successful
+// confirmation short at the previous fixed three seconds.
+func newHTTPServer(c config, handler http.Handler) *http.Server {
+	return &http.Server{Addr: c.HTTPListen, Handler: handler, ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout: 3 * time.Second, WriteTimeout: time.Duration(c.ConfirmMS)*time.Millisecond + 4*time.Second}
 }
 
 var excluded = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4")}
@@ -262,6 +286,35 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 	if !up {
 		return errors.New("BGP peer not established")
 	}
+	// Check the whole answer while publication/GC work is serialized. A large
+	// answer must not consume the last slots and then fail partway through.
+	a.mu.Lock()
+	newPrefixes := make(map[string]struct{}, len(ips))
+	for _, ip := range ips {
+		key := netip.PrefixFrom(ip, 32).String()
+		r := a.routes[key]
+		if r == nil {
+			newPrefixes[key] = struct{}{}
+			continue
+		}
+		if _, exists := r.References[name]; !exists {
+			live := 0
+			for _, until := range r.References {
+				if time.Now().Before(until) {
+					live++
+				}
+			}
+			if live >= 256 {
+				a.mu.Unlock()
+				return errors.New("reference capacity reached")
+			}
+		}
+	}
+	if len(a.routes)+len(newPrefixes) > a.cfg.MaxRoutes {
+		a.mu.Unlock()
+		return errors.New("route capacity reached")
+	}
+	a.mu.Unlock()
 	keys := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		if err := ctx.Err(); err != nil {
@@ -276,6 +329,14 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 			if full {
 				return errors.New("route capacity reached")
 			}
+			a.mu.Lock()
+			if a.routeGeneration == ^uint64(0) {
+				a.mu.Unlock()
+				return errors.New("route generation exhausted")
+			}
+			a.routeGeneration++
+			generation := a.routeGeneration
+			a.mu.Unlock()
 			var id []byte
 			var err error
 			if p, ok := a.pub.(interface {
@@ -288,7 +349,7 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 			if err != nil {
 				return err
 			}
-			r = &lease{Prefix: key, References: map[string]time.Time{}, UUID: id}
+			r = &lease{Prefix: key, References: map[string]time.Time{}, UUID: id, generation: generation}
 			a.mu.Lock()
 			a.routes[key] = r
 			a.mu.Unlock()
@@ -311,7 +372,9 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 		r.References[name] = now.Add(time.Duration(ttl) * time.Second)
 		a.dirty = true
 		if advertised {
-			until := now.Add(time.Duration(ttl) * time.Second)
+			// Retain a little longer than the advertised TTL so repeated cache
+			// hits share a durable lease and do not fsync on every DNS request.
+			until := now.Add(time.Duration(ttl) * time.Second).Truncate(time.Minute).Add(time.Minute)
 			if until.After(r.AnswerUntil) {
 				r.AnswerUntil = until
 			}
@@ -336,7 +399,37 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 			}
 		}
 		a.mu.Unlock()
+		if ready && advertised {
+			// Every positive response must be recoverable after an ungraceful
+			// process exit. A previous persisted lease can cover repeated hits.
+			a.mu.Lock()
+			needsSave := false
+			for _, k := range keys {
+				if r := a.routes[k]; r == nil || r.generation != a.durableGeneration[k] || r.AnswerUntil.After(a.durableUntil[k]) {
+					needsSave = true
+				}
+			}
+			a.mu.Unlock()
+			if needsSave {
+				if err := a.save(); err != nil {
+					return fmt.Errorf("persist answered routes: %w", err)
+				}
+			}
+			// The peer or active-route confirmation can disappear during I/O.
+			a.mu.Lock()
+			ready = a.up
+			for _, k := range keys {
+				r := a.routes[k]
+				if r == nil || r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond || r.generation != a.durableGeneration[k] || r.AnswerUntil.After(a.durableUntil[k]) {
+					ready = false
+				}
+			}
+			a.mu.Unlock()
+		}
 		if ready {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return nil
 		}
 		select {
@@ -366,10 +459,10 @@ func (a *app) issueSnapshot() (string, string, []string, error) {
 		return "", "", nil, errors.New("too many pending route snapshots")
 	}
 	prefixes := make([]string, 0, len(a.routes))
-	wanted := make(map[string]struct{}, len(a.routes))
-	for prefix := range a.routes {
+	wanted := make(map[string]uint64, len(a.routes))
+	for prefix, route := range a.routes {
 		prefixes = append(prefixes, prefix)
-		wanted[prefix] = struct{}{}
+		wanted[prefix] = route.generation
 	}
 	a.snapshotSequence++
 	a.snapshots[id] = routeSnapshot{epoch: a.epoch, issued: now, sequence: a.snapshotSequence, prefixes: wanted}
@@ -394,14 +487,23 @@ func (a *app) acknowledge(epoch, snapshotID string, prefixes []string) error {
 		return errors.New("invalid snapshot prefix count")
 	}
 	for _, p := range prefixes {
-		if _, ok := snap.prefixes[p]; !ok {
+		generation, ok := snap.prefixes[p]
+		if !ok {
 			return errors.New("prefix absent from snapshot")
+		}
+		r := a.routes[p]
+		if r == nil || r.generation != generation {
+			return errors.New("route generation changed since snapshot")
 		}
 	}
 	delete(a.snapshots, snapshotID)
 	a.lastAppliedSnapshot = snap.sequence
-	for _, r := range a.routes {
-		r.AckAt = time.Time{}
+	for prefix, r := range a.routes {
+		// A route created after this snapshot was never observed by it.
+		// Do not erase a newer generation's independently acquired ACK.
+		if gen, ok := snap.prefixes[prefix]; ok && gen == r.generation {
+			r.AckAt = time.Time{}
+		}
 	}
 	for _, p := range prefixes {
 		if r := a.routes[p]; r != nil {
@@ -410,9 +512,16 @@ func (a *app) acknowledge(epoch, snapshotID string, prefixes []string) error {
 	}
 	return nil
 }
-func (a *app) save() error {
+func (a *app) save() (err error) {
 	a.persistMu.Lock()
 	defer a.persistMu.Unlock()
+	defer func() {
+		if err != nil {
+			a.mu.Lock()
+			a.dirty = true
+			a.mu.Unlock()
+		}
+	}()
 	a.mu.Lock()
 	a.dirty = false
 	rows := make([]lease, 0, len(a.routes))
@@ -433,10 +542,42 @@ func (a *app) save() error {
 		return e
 	}
 	tmp := a.cfg.StateFile + ".tmp"
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
+	f, e := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if e != nil {
 		return e
 	}
-	return os.Rename(tmp, a.cfg.StateFile)
+	if _, e = f.Write(b); e == nil {
+		e = f.Sync()
+	}
+	if closeErr := f.Close(); e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return e
+	}
+	if e = os.Rename(tmp, a.cfg.StateFile); e != nil {
+		return e
+	}
+	dir, e := os.Open(filepath.Dir(a.cfg.StateFile))
+	if e != nil {
+		return e
+	}
+	e = dir.Sync()
+	if closeErr := dir.Close(); e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return e
+	}
+	a.mu.Lock()
+	a.durableUntil = make(map[string]time.Time, len(rows))
+	a.durableGeneration = make(map[string]uint64, len(rows))
+	for _, row := range rows {
+		a.durableUntil[row.Prefix] = row.AnswerUntil
+		a.durableGeneration[row.Prefix] = row.generation
+	}
+	a.mu.Unlock()
+	return nil
 }
 func (a *app) gc(now time.Time) {
 	a.mu.Lock()
@@ -494,11 +635,6 @@ func (a *app) gc(now time.Time) {
 		a.mu.Lock()
 		delete(a.routes, k)
 		a.dirty = true
-		a.epoch = token()
-		clear(a.snapshots)
-		for _, remaining := range a.routes {
-			remaining.AckAt = time.Time{}
-		}
 		a.mu.Unlock()
 		<-a.work
 		log.Printf("withdraw prefix=%s", k)
@@ -749,9 +885,90 @@ func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 }
 func (a *app) httpHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/confirm", func(w http.ResponseWriter, r *http.Request) {
+		if a.cfg.ConfirmClientIP == "" {
+			http.NotFound(w, r)
+			return
+		}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		remote, parseErr := netip.ParseAddr(host)
+		allowed, _ := netip.ParseAddr(a.cfg.ConfirmClientIP)
+		if err != nil || parseErr != nil || remote.Unmap() != allowed {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Domain string   `json:"domain"`
+			IPs    []string `json:"ips"`
+			TTL    *uint32  `json:"ttl"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil || dec.Decode(new(any)) != io.EOF {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		_, valid := dns.IsDomainName(req.Domain)
+		if !valid || !dns.IsFqdn(req.Domain) || len(req.Domain) > 255 || len(req.IPs) == 0 || len(req.IPs) > 64 || req.TTL == nil || *req.TTL > a.cfg.TTLMax {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		ips := make([]netip.Addr, 0, len(req.IPs))
+		seen := make(map[netip.Addr]bool, len(req.IPs))
+		zeroNet := netip.MustParsePrefix("0.0.0.0/8")
+		for _, raw := range req.IPs {
+			ip, err := netip.ParseAddr(raw)
+			if err != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsPrivate() || zeroNet.Contains(ip) {
+				http.Error(w, "invalid IPv4 answer", http.StatusBadRequest)
+				return
+			}
+			for _, prefix := range excluded {
+				if prefix.Contains(ip) {
+					http.Error(w, "invalid IPv4 answer", http.StatusBadRequest)
+					return
+				}
+			}
+			// The caller sends only addresses that it needs routed. A domestic
+			// or bootstrap address here may indicate rule-set skew; do not report
+			// it as confirmed without a dynamically acknowledged route.
+			if !a.eligible(ip) {
+				http.Error(w, "unconfirmed IPv4 answer", http.StatusServiceUnavailable)
+				return
+			}
+			if !seen[ip] {
+				seen[ip] = true
+				ips = append(ips, ip)
+			}
+		}
+		a.dnsOnce.Do(func() { a.slots = make(chan struct{}, 32) })
+		select {
+		case a.slots <- struct{}{}:
+			defer func() { <-a.slots }()
+		default:
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		if err := a.ensure(r.Context(), strings.ToLower(req.Domain), ips, *req.TTL, true); err != nil {
+			log.Printf("confirmation blocked domain=%s error=%v", req.Domain, err)
+			http.Error(w, "route confirmation failed", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			http.Error(w, "method", 405)
+			return
+		}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		remote, parseErr := netip.ParseAddr(host)
+		peer, peerErr := netip.ParseAddr(a.cfg.PeerIP)
+		if err != nil || parseErr != nil || (!remote.IsLoopback() && (peerErr != nil || remote.Unmap() != peer.Unmap())) {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		a.mu.Lock()
@@ -931,7 +1148,7 @@ func run(path string) error {
 			}
 		}
 	}()
-	hs := &http.Server{Addr: c.HTTPListen, Handler: a.httpHandler(), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second}
+	hs := newHTTPServer(c, a.httpHandler())
 	udp := &dns.Server{Addr: c.DNSListen, Net: "udp", Handler: a}
 	tcp := &dns.Server{Addr: c.DNSListen, Net: "tcp", Handler: a}
 	errs := make(chan error, 3)

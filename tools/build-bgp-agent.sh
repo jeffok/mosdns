@@ -4,7 +4,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-VERSION=bgp-validation-20261114.1
+VERSION=bgp-validation-20261114.6
 TAG="jeffok/mosdns-bgp:$VERSION"
 PLATFORM=${PLATFORM:-linux/arm64}
 OUT_DIR=${OUT_DIR:-$ROOT/.cache/bgp-agent/$VERSION}

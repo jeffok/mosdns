@@ -2,14 +2,11 @@
 
 家庭网络 DNS。容器基于 mosdns v5.3.4，按域名规则选择国内或全局上游。出口路由不在本服务里完成，由部署侧的路由表处理。镜像为 [`jeffok/mosdns`](https://hub.docker.com/r/jeffok/mosdns)。
 
-RouterOS 有两种可选集成，默认都关闭，互不影响：
-
-- `ENABLE_ROS_ADDRLIST`：按最终应答写入地址池。szhome 使用这种方式。
-- `ENABLE_ROS_SYNC`：按 `ai-domains.txt` 周期重写地址池。szhome 不使用。
+镜像可选同时启动 mosdns 和 BGP agent。mosdns 负责按规则选择上游；agent 为最终选中的全球应答发布和确认 BGP 路由。该功能需要 RouterOS 独立路由表和本地确认脚本，**不能仅替换 DNS 地址后视为完成部署**。联合模式和实际路由切换须先经过隔离验证。
 
 ## 解析
 
-请求先查固定 hosts 和缓存，再按 CN 例外、AI 名单、GFW 硬名单、软名单、CN 规则选择上游。AI 域名走 `DNS_AI`（留空则与 `DNS_GLOBAL` 相同），优先于 GFW 硬名单。未知域名默认 `UNKNOWN_POLICY=cn_first`：先走国内上游，接受国内段、RFC1918 和 CGNAT；其余结果回退全局上游。已知 bogus 地址丢弃。AAAA 默认返回空，`ENABLE_IPV6=1` 时开启。
+请求先查固定 hosts，再按 CN 例外、AI 名单、GFW 硬名单、软名单、CN 规则选择上游。AI 域名走 `DNS_AI`（留空则与 `DNS_GLOBAL` 相同），优先于 GFW 硬名单。未知域名默认 `UNKNOWN_POLICY=cn_first`：先走国内上游，接受国内段、RFC1918 和 CGNAT；其余结果回退全局上游。已知 bogus 地址丢弃。非 BGP 模式使用 mosdns 缓存；BGP 模式当前跳过 mosdns 缓存，以确保每次最终应答都经过路由确认。AAAA 默认返回空，`ENABLE_IPV6=1` 时开启。
 
 ## 规则更新
 
@@ -58,7 +55,7 @@ Compose 使用 host 网络，默认监听 `0.0.0.0:53`。主机 53 端口需要�
 | `MIN_CN`, `MIN_PROXY`, `MIN_GFW`, `MIN_AI`, `MIN_IP`, `MIN_BOGUS` | `80000`, `15000`, `3000`, `20`, `4000`, `100` | 有效条目下限 |
 | `CN_EXCEPTIONS_MIN` / `APPLE_CN_MIN` | `0` / `0` | 可选文件下限，允许为空 |
 | `REL_FLOOR_PCT` | `80` | 相对上一有效版本的最低比例 |
-| `CACHE_SIZE` / `LAZY_CACHE_TTL` | `10240` / `120` 秒 | 缓存容量与惰性 TTL |
+| `CACHE_SIZE` / `LAZY_CACHE_TTL` | `10240` / `120` 秒 | 非 BGP 模式的缓存容量与惰性 TTL；BGP 模式不使用 mosdns 缓存 |
 | `CACHE_DUMP_INTERVAL` / `CACHE_DUMP_FILE` | `1800` 秒 / `/data/cache.dump` | 缓存 dump |
 | `DNS_ENTRY_LISTEN` / `DNS_API_LISTEN` | `0.0.0.0:53` / `127.0.0.1:9091` | DNS 与管理 API |
 | `RULES_DIR` / `STATE_DIR` / `MOSDNS_CONFIG` | `/etc/mosdns/rules` / `/data/state` / `/etc/mosdns/config.yaml` | 规则、状态、生成配置 |
@@ -68,44 +65,23 @@ Compose 使用 host 网络，默认监听 `0.0.0.0:53`。主机 53 端口需要�
 | `CANARY_PORT` / `CANARY_API` / `CANARY_SENTINEL` | `15353` / `19091` / `www.baidu.com` | 更新前金丝雀 |
 | `RESTART_TIMEOUT` | `20` 秒 | 应用规则后的健康检查 |
 | `DOH_ENABLED` / `DOH_CERT` / `DOH_KEY` / `DOH_LISTEN` | `0` / 默认证书路径 / 默认私钥路径 / `0.0.0.0:8443` | 可选 DoH |
-| `ENABLE_ROS_ADDRLIST` | `0` | `1` 时把全局/AI 路径的非国内 IPv4 写入地址池。缺 URL 或密码则关闭插件，DNS 继续 |
-| `ROS_ADDRLIST_URL` / `ROS_USER` / `ROS_PASS` | 空 / `admin` / 空 | REST 地址、用户、密码。只用 HTTP。密码只来自环境变量 |
-| `ROS_ADDRLIST_LIST` | `gfw-proxy` | 地址池名称 |
-| `ROS_ADDRLIST_TIMEOUT` | `5m` | 动态条目租约，应长于下游 DNS 缓存 |
-| `ROS_ADDRLIST_TTL_MAX` | `300` | 全局/AI 应答 TTL 上限（秒） |
-| `ROS_ADDRLIST_SYNC_BUDGET_MS` | `80` | 新地址同步写入的等待上限，超时先应答 |
+| `ENABLE_ROS_BGP` / `BGP_EMBEDDED` | `0` / `0` | 启用 BGP 应答确认及同容器 agent；联合模式两者均设为 `1` |
+| `BGP_LOCAL_IP` | 空 | 联合模式必填，必须与 agent 配置的 local_ip、next_hop 一致 |
+| `BGP_AGENT_CONFIG` | `/etc/mosdns/bgp-agent.json` | 联合模式 agent JSON 配置路径 |
+| `ROS_BGP_CONFIRM_URL` | 联合模式为 `http://127.0.0.1:9080/confirm` | 联合模式只允许此本机确认端点 |
+| `ROS_BGP_CONFIRM_TIMEOUT_MS` | `6500` | mosdns 等待 agent 确认的上限；还需与 ROS DNS 和 agent 的总等待预算协调 |
 | `TZ` | `Asia/Shanghai` | 容器时区，规则在本地 04:30 检查 |
 
-## 动态地址池
+## BGP 联合模式
 
-`ENABLE_ROS_ADDRLIST=1` 后，入口先完成原有解析（含 fallback 和缓存），再检查最终应答里的 IPv4。
+联合镜像包含 mosdns 与 BGP agent。mosdns 保留国内、全球、AI、hosts 和 fallback 规则；全球路径实际选中的 IPv4 应答须经 agent 与 RouterOS 路由确认后才能返回。agent 和 mosdns 的某一进程退出时，入口脚本终止整个联合服务，运行时应配置经验证的自动重启策略。
 
-`ros_tag` 把全局/AI 路径的公网 IPv4 记入内存来源表。`ros_confirm` 对最终应答逐个判断：没有来源记录、属于国内段、私网或 CGNAT 的地址不写。comment 不是 `mosdns-dyn` 的静态条目不覆盖。剩余租约大于一半则跳过；不足一半则后台续约；没有条目或已过期则同步 `PUT`，等待上限默认 80ms，超时先返回 DNS 应答。来源表可落在 `/data/state/ros_source.json`。
+1. 先准备 agent JSON 配置，字段参见 [配置示例](bgp-agent/config.example.json)；示例用于独立验证，不能直接套用到联合容器。联合模式要求 `confirm_client_ip=127.0.0.1`、`dns_listen=127.0.0.1:1053`、`http_listen=0.0.0.0:9080`，`local_ip` 和 `next_hop` 必须与 `BGP_LOCAL_IP` 一致。国内 IP 文件与 mosdns 使用同一份已校验的规则；持久状态文件放在可写挂载卷中。联合模式先设 `warm_domains=[]`，避免 agent 绕过 mosdns 最终选择直接预热并发布路由。
+2. 设置 `ENABLE_ROS_BGP=1`、`BGP_EMBEDDED=1`、`BGP_LOCAL_IP`，并挂载上述 JSON 配置。当前实现跳过 mosdns 缓存，避免缓存结果缺少来源信息。
+3. RouterOS 需要预先配置固定 BGP 邻居、专用 FIB 表、受限导入过滤规则及确认脚本，并限制相关管理端口访问。BGP 路由安装、备用黑洞路由、失败关闭和确认时效均须验收；详情见 [隔离验证说明](bgp-agent/ros/README.md)。
+4. 先用明确限定的一台客户端验证国内和全球 DNS、缓存与首次连接的实际出口、BGP/进程重启及回退，再考虑将家庭 DNS 或路由迁移。已有客户端缓存和现存连接需要单独处理。
 
-`ros_tag` 和 `ros_confirm` 必须定义在引用它们的 sequence 之前，否则启动失败。
-
-RouterOS 账号需要 `read,write,api,rest-api`。只有 `rest-api`、没有 `api` 时 HTTP 500。`write` 不能限制到某一个地址池。传输只用 HTTP。
-
-内存里的租约跟进程走。只在 RouterOS 上删除动态条目，进程不会立刻补写，要等租约进入后半段，或重启容器。
-
-## 按名单周期同步
-
-`ENABLE_ROS_SYNC=1` 时，后台按 `SYNC_AI_INTERVAL`（默认 120 秒）读取正在使用的 `ai-domains.txt`，把解析出的 IPv4 写入地址池（默认 `ai-sgp`）。它不下载规则，也不重载 mosdns。关闭时相关变量留空即可，不会启动、不会告警。
-
-szhome 的分流不走这套同步。需要独立 AI 出口的其它站点才打开它。
-
-| 变量 | 默认值 | 作用 |
-| --- | --- | --- |
-| `ROS_HOST` | 空 | RouterOS 地址，可带端口 |
-| `ROS_USER` / `ROS_PASS` | `admin` / 空 | REST 账号。日志不打印密码 |
-| `ROS_SCHEME` | `http` | `http` 或 `https` |
-| `ROS_TLS_INSECURE` | `0` | 自签证书时设 `1` |
-| `ROS_AI_LIST` | `ai-sgp` | 地址池 |
-| `ROS_AI_TTL` | `1800s` | 条目超时 |
-| `ROS_AI_COMMENT` | `mosdns-ai` | 用于识别本脚本写入的条目 |
-| `SYNC_AI_DNS` | 与 `CONTAINER_DNS` 相同 | 建议 `127.0.0.1`，使写入的地址和客户端看到的一致 |
-
-每轮先按 comment 删除旧条目再写入。空窗期内的新连接会走默认路由，已建立的连接不受影响。
+BGP 路由按 IP 生效，多个域名共用同一 IP 时无法为它们分别选择出口。容量上限、黑洞保留及回收、断电恢复和长连接需结合现场测试，不能仅凭 BGP 会话建立判断全家分流可用。
 
 ## 运维
 
@@ -119,118 +95,27 @@ docker exec mosdns /opt/mosdns/rollback.sh --lkg
 
 `status.sh` 看规则版本、LKG 和同步日志。`fetch.sh --probe` 检查规则源。`explain.sh` 看命中和应答。`rollback.sh --lkg` 回到最近一份可用规则。DoH 需要 `DOH_ENABLED=1` 并把证书放到 `certs/`。
 
-## RouterOS
+## RouterOS 部署与验证
 
-通用写法用独立容器网段。szhome 把容器放在 LAN 上，不另建 bridge 和 NAT。官方说明见 [Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode)。
-
-### 通用
-
-安装与系统匹配的 `container` 包（ARM64 设备用 arm64），然后：
-
-```
-/system/device-mode/update container=yes
-```
-
-按提示复位或冷启动。官方不建议把 `root-dir` 放在内置 flash；有 USB 或 NVMe 时用外置盘。镜像解包需要额外内存，建议设置 `memory-high`。
-
-```
-/interface/veth/add name=veth-mosdns address=172.17.0.2/24 gateway=172.17.0.1
-/interface/bridge/add name=containers
-/ip/address/add address=172.17.0.1/24 interface=containers
-/interface/bridge/port add bridge=containers interface=veth-mosdns
-/ip/firewall/nat/add chain=srcnat action=masquerade src-address=172.17.0.0/24
-```
-
-环境变量写入 `ENV_MOSDNS`，挂载 rules 与 data，再 `remote-image=jeffok/mosdns:latest` 或导入下面的 tar。RouterOS DNS 指到 `172.17.0.2`，并关掉 DHCP 客户端的 `use-peer-dns`。若客户端仍使用路由器地址，打开 `allow-remote-requests`，并只允许受信网段访问 53。
-
-`docker save` 的原样 tar，RouterOS 会报 `no config found in manifest`。在 ARM64 上构建后转换：
+RouterOS 需安装与系统架构匹配的 container 包并启用容器功能，准备持久规则、状态和 agent 配置挂载。构建 ARM64 镜像并生成 RouterOS 可导入归档：
 
 ```sh
-docker build --platform linux/arm64 -t jeffok/mosdns:ros-addrlist .
-docker save jeffok/mosdns:ros-addrlist -o mosdns-oci.tar
+docker build --platform linux/arm64 -t jeffok/mosdns:bgp-validation .
+docker save jeffok/mosdns:bgp-validation -o mosdns-oci.tar
 python3 tools/ros-docker-archive.py mosdns-oci.tar mosdns-arm64.tar
 ```
 
-### szhome
-
-RB5009UG+S+，RouterOS 7.24.6，无外置盘。容器与 LAN 同网段。
-
-| 项目 | 值 |
-| --- | --- |
-| 容器地址 | `192.168.88.222/24`，`veth-mosdns` 接入 `br-lan`，网关 `192.168.88.254` |
-| 目录 | `root-dir=mosdns/root-ros`，规则 `/mosdns/rules`，状态 `/mosdns/data` |
-| 环境变量 | 只用 `ENV_MOSDNS` |
-| 镜像 | 本仓库 ARM64 构建，标签 `jeffok/mosdns:ros-addrlist`，经 `tools/ros-docker-archive.py` 导入 |
-| 资源 | `memory-high=200MiB`，`start-on-boot=yes`，`logging=yes` |
-
-```
-/container envs add list=ENV_MOSDNS key=TZ value="Asia/Shanghai"
-/container envs add list=ENV_MOSDNS key=DNS_ENTRY_LISTEN value="0.0.0.0:53"
-/container envs add list=ENV_MOSDNS key=DNS_GLOBAL value="8.8.8.8,1.1.1.1"
-/container envs add list=ENV_MOSDNS key=FETCH_RESOLVE value="gitea.jeffok.com:4443:192.168.88.252"
-/container envs add list=ENV_MOSDNS key=ENABLE_ROS_ADDRLIST value="1"
-/container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_URL value="http://192.168.88.254"
-/container envs add list=ENV_MOSDNS key=ROS_USER value="mosdns"
-/container envs add list=ENV_MOSDNS key=ROS_PASS value="<密码>"
-/container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_TIMEOUT value="30m"
-/container envs add list=ENV_MOSDNS key=ROS_ADDRLIST_SYNC_BUDGET_MS value="300"
-```
-
-`ROS_PASS` 只放在路由器的环境变量里。`/container envs print` 和容器日志会显示它，不要把输出提交到仓库。
-
-写入账号 `mosdns`，来源限制 `192.168.88.222/32`。策略必须包含 `read,write,api,rest-api`，并且不要给 `local`、`ssh`、`telnet`、`winbox`、`web`：
-
-```
-/user group add name=mosdns-sync policy=read,write,api,rest-api,!local,!telnet,!ssh,!ftp,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon
-/user add name=mosdns group=mosdns-sync address=192.168.88.222/32 password=<密码>
-```
-
-路由器 DNS：
-
-```
-/ip dns set servers=192.168.88.222 cache-max-ttl=2m allow-remote-requests=yes
-```
-
-DHCP 的 `dns-server` 仍是 `192.168.88.254`，由路由器转发到容器。`servers` 不要再加 `119.29.29.29`，否则一部分查询不经过 mosdns，地址不会进地址池。`cache-max-ttl=2m`。地址池租约 30 分钟，新地址同步写入最多等 300 毫秒，避免应答先于路由出去。
-
-分流：
-
-| 流量 | 出口 |
-| --- | --- |
-| 国内路径，以及没有写入 `gfw-proxy` 的地址 | 默认路由 `pppoe-cn` |
-| 全局/AI 路径的非国内 IPv4 | `gfw-proxy`，comment 前缀 `mosdns-dyn`，租约 30 分钟；`br-lan` 新连接标记 `cm-ovpn`，走 `rt-ovpn` → `ovpn-szof` |
-| `gitea` / `reg` / `gitlab.jeffok.com` | `192.168.88.252`，来自 `custom-hosts.txt` |
-
-`8.8.8.8/32` 和 `1.1.1.1/32` 走 `ovpn-szof`，供 `DNS_GLOBAL` 使用。隧道端点 `183.56.180.152/32` 走 `pppoe-cn`。`rt-ovpn` 的默认路由是 `ovpn-szof`。地址池保留占位 `255.255.255.255`（comment `gfw-proxy-keep`）。
-
-mangle 只匹配从 `br-lan` 进入的新连接，路由器自己发出的包不打标。隧道是 TCP 8881。发往 `gfw-proxy` 的新 UDP/443 由 forward 链回 `icmp-port-unreachable`，浏览器立即改走 TCP，不把 QUIC 塞进 TCP 隧道。
-
-路由器 `disable-ipv6=yes`。容器保持 `ENABLE_IPV6=0`。
-
-不导入 `comment=CN` 的明细路由，也不运行 `Update_CN_Routes`。国内流量走默认的电信路由。
-
-验证：
-
-```
-/ip dns cache flush
-:put [:resolve www.baidu.com server=192.168.88.222]
-:put [:resolve www.google.com server=192.168.88.222]
-```
-
-国内名不出现在 `gfw-proxy`。`www.github.com` 的地址以 `mosdns-dyn` 写入，租约约 30 分钟。清缓存后再解析，否则看到的是路由器缓存，不会触发写入。
-
-DoH、加密 DNS 或 Private Relay 不经过这台 mosdns，对应地址不会进地址池。
-
-停止分流时去掉 `cm-ovpn` 两条 mangle，或把 `/ip dns servers` 改回国内递归（例如 `119.29.29.29`）。规则本身回退用容器里的 `rollback.sh --lkg`。
+先核对接口、容器 IP、固定 BGP 邻居和现网路由，再按 [RouterOS 隔离验证说明](bgp-agent/ros/README.md) 部署；示例脚本使用 szhome 验证地址与专用路由表，不会自动完成家庭网络切换。不要把验证服务的状态视为实际家庭分流验收。`ENABLE_IPV6=0` 是本方案当前的 IPv4 范围；客户端绕过本机 DNS 的加密 DNS、固定 IP 和共享 IP 需要另外评估。
 
 ## 目录
 
 | 路径 | 内容 |
 | --- | --- |
-| `plugins/ros_addrlist/` | 按应答写入 RouterOS 地址池 |
+| `plugins/` | mosdns 的最终应答来源及 BGP 路由确认插件 |
 | `scripts/` | 配置模板、入口、同步和运维脚本 |
 | `rules/` | 初始 hosts 与规则；完整规则在构建时下载 |
 | `tools/ros-docker-archive.py` | 把 `docker save` 转成 RouterOS 可导入的 tar |
-| `tests/` | 同步、运行时和地址池测试 |
+| `bgp-agent/` | BGP 路由发布、确认、持久状态与隔离验证 |
+| `tests/` | 规则同步、运行时及分流测试 |
 | `data/` | 运行状态，不提交 |
 | `.github/workflows/` | 冒烟测试和镜像构建 |

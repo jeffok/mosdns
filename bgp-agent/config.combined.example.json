@@ -1,0 +1,23 @@
+{
+  "local_ip": "192.168.88.222",
+  "peer_ip": "192.168.88.254",
+  "asn": 64513,
+  "peer_asn": 64512,
+  "next_hop": "192.168.88.222",
+  "dns_listen": "127.0.0.1:1053",
+  "http_listen": "0.0.0.0:9080",
+  "upstreams": [
+    "8.8.8.8:53",
+    "1.1.1.1:53"
+  ],
+  "warm_domains": [],
+  "cn_file": "/etc/mosdns/rules/IPv4.China.list",
+  "state_file": "/data/state/bgp-routes.json",
+  "ttl_max": 300,
+  "retain_seconds": 86400,
+  "confirm_ms": 4500,
+  "ack_max_age_ms": 6000,
+  "max_routes": 512,
+  "gc_dry_run": true,
+  "confirm_client_ip": "127.0.0.1"
+}

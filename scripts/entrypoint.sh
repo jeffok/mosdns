@@ -168,60 +168,28 @@ render_config() {
   UPSTREAMS_GLOBAL=$(dns_to_yaml "$DNS_GLOBAL")
   UPSTREAMS_AI=$(dns_to_yaml "$DNS_AI")
 
-  # 默认关闭：入口仍是 main_sequence，不渲染 ros_addrlist。
+  # 默认关闭：入口仍是 main_sequence，不渲染 BGP 插件。
   DNS_ENTRY_SEQUENCE="main_sequence"
-  ROS_ADDRLIST_PLUGIN=""
+  BGP_ENTRY_PLUGIN=""
   ROS_TAG_EXEC=""
-  case "${ENABLE_ROS_ADDRLIST:-0}" in
+  ROS_CN_TAG_EXEC=""
+  CACHE_EXEC=$(printf '%s\n' '  - exec: $lazy_cache' '  - matches: has_resp' '    exec: accept')
+  case "${ENABLE_ROS_BGP:-0}" in
     1|true|yes)
-      if [ -z "${ROS_ADDRLIST_URL:-}" ] || [ -z "${ROS_PASS:-}" ]; then
-        log "ERROR ENABLE_ROS_ADDRLIST=1 但缺少 ROS_ADDRLIST_URL 或 ROS_PASS，已关闭地址池写入；DNS 服务不受影响"
-      else
-        ROS_USER="${ROS_USER:-admin}"
-        ROS_ADDRLIST_LIST="${ROS_ADDRLIST_LIST:-gfw-proxy}"
-        ROS_ADDRLIST_TIMEOUT="${ROS_ADDRLIST_TIMEOUT:-5m}"
-        ROS_ADDRLIST_SYNC_BUDGET_MS="${ROS_ADDRLIST_SYNC_BUDGET_MS:-80}"
-        ROS_ADDRLIST_CONCURRENCY="${ROS_ADDRLIST_CONCURRENCY:-4}"
-        ROS_ADDRLIST_QUEUE="${ROS_ADDRLIST_QUEUE:-1024}"
-        ROS_ADDRLIST_TTL_MAX="${ROS_ADDRLIST_TTL_MAX:-300}"
-        ROS_ADDRLIST_SOURCE_TTL="${ROS_ADDRLIST_SOURCE_TTL:-600s}"
-        ROS_CN_FILE="${RULES_DIR:-/etc/mosdns/rules}/IPv4.China.list"
-        ROS_STATE_FILE="${STATE_DIR:-/data/state}/ros_source.json"
-        DNS_ENTRY_SEQUENCE="main_entry"
-        ROS_TAG_EXEC=$(printf '%s\n' \
-          "  - exec: ttl 0-${ROS_ADDRLIST_TTL_MAX}" \
-          '  - exec: $ros_tag')
-        ROS_TAG_PLUGINS=$(printf '%s\n' \
-          '- tag: ros_tag' \
-          '  type: ros_addrlist' \
-          '  args:' \
-          '    mode: tag' \
-          '    source_key: gfw' \
-          "    source_ttl: ${ROS_ADDRLIST_SOURCE_TTL}" \
-          "    state_file: ${ROS_STATE_FILE}" \
-          '- tag: ros_confirm' \
-          '  type: ros_addrlist' \
-          '  args:' \
-          '    mode: confirm' \
-          '    source_key: gfw' \
-          "    state_file: ${ROS_STATE_FILE}" \
-          "    server: ${ROS_ADDRLIST_URL}" \
-          "    user: ${ROS_USER}" \
-          '    passwd_env: ROS_PASS' \
-          "    addrlist: ${ROS_ADDRLIST_LIST}" \
-          "    timeout: ${ROS_ADDRLIST_TIMEOUT}" \
-          "    sync_budget: ${ROS_ADDRLIST_SYNC_BUDGET_MS}ms" \
-          "    concurrency: ${ROS_ADDRLIST_CONCURRENCY}" \
-          "    queue: ${ROS_ADDRLIST_QUEUE}" \
-          "    cn_ip_file: ${ROS_CN_FILE}")
-        ROS_ADDRLIST_PLUGIN=$(printf '%s\n' \
-          '- tag: main_entry' \
-          '  type: sequence' \
-          '  args:' \
-          '  - exec: $main_sequence' \
-          '  - exec: $ros_confirm')
-        log "ros_addrlist enabled list=${ROS_ADDRLIST_LIST} user=${ROS_USER}"
-      fi
+      case "${ENABLE_IPV6:-0}" in
+        1|true|yes) log "ERROR ENABLE_ROS_BGP does not support ENABLE_IPV6"; return 1 ;;
+      esac
+      [ -n "${ROS_BGP_CONFIRM_URL:-}" ] || { log "ERROR ENABLE_ROS_BGP requires ROS_BGP_CONFIRM_URL"; return 1; }
+      DNS_ENTRY_SEQUENCE="main_entry"
+      ROS_BGP_CONFIRM_TIMEOUT_MS="${ROS_BGP_CONFIRM_TIMEOUT_MS:-6500}"
+      case "$ROS_BGP_CONFIRM_TIMEOUT_MS" in ''|*[!0-9]*) log "ERROR invalid ROS_BGP_CONFIRM_TIMEOUT_MS"; return 1 ;; esac
+      # No source provenance is stored by the upstream cache format. Disable it
+      # in BGP mode rather than risk reusing a response without its source.
+      CACHE_EXEC=""
+      ROS_TAG_EXEC=$(printf '%s\n' '  - exec: ttl 0-300' '  - exec: $bgp_tag')
+      ROS_CN_TAG_EXEC='  - exec: $bgp_direct_tag'
+      ROS_TAG_PLUGINS=$(printf '%s\n'         '- tag: bgp_tag' '  type: ros_bgp' '  args:' '    mode: tag'         '- tag: bgp_direct_tag' '  type: ros_bgp' '  args:' '    mode: direct_tag'         '- tag: bgp_confirm' '  type: ros_bgp' '  args:' '    mode: confirm'         "    endpoint: ${ROS_BGP_CONFIRM_URL}" "    sync_budget: ${ROS_BGP_CONFIRM_TIMEOUT_MS}ms" "    cn_ip_file: ${RULES_DIR:-/etc/mosdns/rules}/IPv4.China.list")
+      BGP_ENTRY_PLUGIN=$(printf '%s\n' '- tag: main_entry' '  type: sequence' '  args:'         '  - exec: $main_sequence' '  - exec: $bgp_confirm')
       ;;
   esac
 
@@ -260,8 +228,12 @@ render_config() {
   [ -n "$DOH_PLUGIN" ] && printf '%s\n' "$DOH_PLUGIN" > "$blockdir/DOH_PLUGIN"
   : > "$blockdir/ROS_TAG_PLUGINS"
   [ -n "${ROS_TAG_PLUGINS:-}" ] && printf '%s\n' "$ROS_TAG_PLUGINS" > "$blockdir/ROS_TAG_PLUGINS"
-  : > "$blockdir/ROS_ADDRLIST_PLUGIN"
-  [ -n "$ROS_ADDRLIST_PLUGIN" ] && printf '%s\n' "$ROS_ADDRLIST_PLUGIN" > "$blockdir/ROS_ADDRLIST_PLUGIN"
+  : > "$blockdir/BGP_ENTRY_PLUGIN"
+  [ -n "$BGP_ENTRY_PLUGIN" ] && printf '%s\n' "$BGP_ENTRY_PLUGIN" > "$blockdir/BGP_ENTRY_PLUGIN"
+  : > "$blockdir/ROS_CN_TAG_EXEC"
+  [ -n "$ROS_CN_TAG_EXEC" ] && printf '%s\n' "$ROS_CN_TAG_EXEC" > "$blockdir/ROS_CN_TAG_EXEC"
+  : > "$blockdir/CACHE_EXEC"
+  [ -n "$CACHE_EXEC" ] && printf '%s\n' "$CACHE_EXEC" > "$blockdir/CACHE_EXEC"
   : > "$blockdir/ROS_TAG_EXEC"
   [ -n "$ROS_TAG_EXEC" ] && printf '%s\n' "$ROS_TAG_EXEC" > "$blockdir/ROS_TAG_EXEC"
 
@@ -309,8 +281,10 @@ render_config() {
     /^%UPSTREAMS_AI%$/      { block("UPSTREAMS_AI"); next }
     /^%DOH_PLUGIN%$/        { block("DOH_PLUGIN"); next }
     /^%ROS_TAG_PLUGINS%$/   { block("ROS_TAG_PLUGINS"); next }
-    /^%ROS_ADDRLIST_PLUGIN%$/ { block("ROS_ADDRLIST_PLUGIN"); next }
+    /^%BGP_ENTRY_PLUGIN%$/ { block("BGP_ENTRY_PLUGIN"); next }
     /^%ROS_TAG_EXEC%$/      { block("ROS_TAG_EXEC"); next }
+    /^%CACHE_EXEC%$/        { block("CACHE_EXEC"); next }
+    /^%ROS_CN_TAG_EXEC%$/   { block("ROS_CN_TAG_EXEC"); next }
     {
       line = $0
       out = ""
@@ -350,6 +324,7 @@ check_config_files() {
 
 # ---------------------------------------------------------------- mosdns 监督
 MOSDNS_PID=""
+BGP_PID=""
 MOSDNS_RESTARTS=0
 
 start_mosdns() {
@@ -588,11 +563,19 @@ sync_supervisor() {
   done
 }
 
+stop_bgp() {
+  [ -n "$BGP_PID" ] || return 0
+  kill -TERM "$BGP_PID" 2>/dev/null || true
+  wait "$BGP_PID" 2>/dev/null || true
+  BGP_PID=""
+  rm -f "$STATE/bgp-agent.pid"
+}
+
 shutdown() {
   log "shutdown signal received"
   [ -n "${SYNC_PID:-}" ] && kill "$SYNC_PID" 2>/dev/null || true
-  [ -n "${ROS_SYNC_PID:-}" ] && kill "$ROS_SYNC_PID" 2>/dev/null || true
   stop_mosdns
+  stop_bgp
   exit 0
 }
 trap shutdown TERM INT
@@ -610,6 +593,12 @@ if ! runtime_restore_lkg "$STATE/lkg" "$RULES"; then
 else
   log "restored last known good rules before starting mosdns"
 fi
+# Combined mode is explicit; legacy standalone DNS behaviour remains unchanged.
+if [ "${BGP_EMBEDDED:-0}" = 1 ]; then
+  case "${ENABLE_ROS_BGP:-0}" in 1|true|yes) ;; *) warn "BGP_EMBEDDED requires ENABLE_ROS_BGP"; exit 1 ;; esac
+  ROS_BGP_CONFIRM_URL="${ROS_BGP_CONFIRM_URL:-http://127.0.0.1:9080/confirm}"
+  [ "$ROS_BGP_CONFIRM_URL" = "http://127.0.0.1:9080/confirm" ] || { warn "combined confirmation endpoint must be loopback"; exit 1; }
+fi
 render_config || { warn "config render failed"; exit 1; }
 if [ "${RENDER_ONLY:-0}" = 1 ]; then
   exit 0
@@ -618,38 +607,43 @@ if ! check_config_files; then
   warn "some rule files still missing after init; mosdns may fail to start"
 fi
 
-# ENABLE_ROS_SYNC 默认 0：不校验 ROS_*、不告警、不启动任何同步进程。
-# 仅 =1 时才校验 ROS_HOST / ROS_PASS；缺一则打一条错误并只禁用同步，mosdns 照常提供 DNS。
-ROS_SYNC_PID=""
-ROS_SYNC_OK=0
-if [ "${ENABLE_ROS_SYNC:-0}" = 1 ]; then
-  if [ -z "${ROS_HOST:-}" ] || [ -z "${ROS_PASS:-}" ]; then
-    log "ERROR ENABLE_ROS_SYNC=1 但缺少 ROS_HOST 或 ROS_PASS，已禁用 AI 地址列表同步；DNS 服务不受影响"
-  else
-    ROS_SYNC_OK=1
+if [ "${BGP_EMBEDDED:-0}" = 1 ]; then
+  BGP_AGENT_CONFIG="${BGP_AGENT_CONFIG:-/etc/mosdns/bgp-agent.json}"
+  [ -n "${BGP_LOCAL_IP:-}" ] || { warn "BGP_LOCAL_IP required for combined mode"; exit 1; }
+  [ -r "$BGP_AGENT_CONFIG" ] || { warn "BGP agent configuration missing"; exit 1; }
+  if ! jq -e --arg local "$BGP_LOCAL_IP" '
+    .confirm_client_ip == "127.0.0.1" and
+    .local_ip == $local and .next_hop == $local and
+    .dns_listen == "127.0.0.1:1053" and .http_listen == "0.0.0.0:9080" and
+    .warm_domains == []
+  ' "$BGP_AGENT_CONFIG" >/dev/null; then
+    warn "invalid combined BGP config: check local IP, loopback confirm, listeners and empty warm_domains"; exit 1
   fi
+  log "starting embedded BGP agent"
+  /usr/bin/bgp-agent -config "$BGP_AGENT_CONFIG" &
+  BGP_PID=$!
+  echo "$BGP_PID" > "$STATE/bgp-agent.pid"
 fi
-
 start_mosdns
-
-if [ "$ROS_SYNC_OK" = 1 ]; then
-  SYNC_AI_INTERVAL="${SYNC_AI_INTERVAL:-120}"
-  case "$SYNC_AI_INTERVAL" in
-    ''|*[!0-9]*) SYNC_AI_INTERVAL=120 ;;
-  esac
-  [ "$SYNC_AI_INTERVAL" -lt 1 ] && SYNC_AI_INTERVAL=120
-  (
-    while :; do
-      "$SCRIPT_DIR/sync-ai.sh" || warn "sync-ai 本轮失败，DNS 不受影响"
-      sleep "$SYNC_AI_INTERVAL"
-    done
-  ) &
-  ROS_SYNC_PID=$!
-  log "sync-ai 后台循环已启动 interval=${SYNC_AI_INTERVAL}s"
-fi
 
 sync_supervisor &
 SYNC_PID=$!
+
+# In combined mode either process exiting tears down the other process and
+# returns failure; the container runtime owns restart policy. A deliberate
+# validated rule reload also restarts the entire unit, preserving BGP safety.
+if [ "${BGP_EMBEDDED:-0}" = 1 ]; then
+  while :; do
+    if ! kill -0 "$MOSDNS_PID" 2>/dev/null || ! kill -0 "$BGP_PID" 2>/dev/null; then
+      warn "combined service process exited; terminating both"
+      [ -n "${SYNC_PID:-}" ] && kill "$SYNC_PID" 2>/dev/null || true
+          stop_mosdns
+      stop_bgp
+      exit 1
+    fi
+    sleep 1
+  done
+fi
 
 # 并列监督：mosdns 退出就拉起；收到 TERM 由 trap 处理
 MOSDNS_RESTARTS=0
