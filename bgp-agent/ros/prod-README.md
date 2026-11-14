@@ -9,18 +9,22 @@ only; it refuses to remove guard routes or barriers. A partial failed import
 requires inspection before attempting cleanup. None of these files is a safe
 rollback for an operational deployment with active client leases.
 
-Names: instance and connection `szhome-mosdns-bgp`, filters
-`szhome-mosdns-bgp-in` and `szhome-mosdns-bgp-out`, future script/scheduler
-`szhome-mosdns-bgp-writer`; future guard namespace `BGP-PROD-BH:`. The existing
+Names: instance and connection `mosdns`, filters
+`mosdns-in` and `mosdns-out`, future script/scheduler
+`mosdns-writer`; future guard namespace `BGP-PROD-BH:`. The existing
 `rt-ovpn` and `cm-ovpn` are not modified.
 
 ## Mandatory gates before enabling
 
 - The normal route ACK and lifecycle writer must be serialized by one proven
-  implementation; the present guard coordinator and `/guardwriter/*` are not
-  wired. No scheduler may run until restart reconciliation and end-to-end
-  confirmation have passed. The application must pin a lease through actual DNS
-  response completion; current code has no such callback.
+  implementation. No scheduler may run until restart reconciliation and
+  end-to-end confirmation have passed. The DNS send hook, agent pin and writer
+  integration must be tested together, including failure after socket write.
+- Guard admission is deliberately two operations: `create_guard` verifies the
+  persistent blackhole and absence of barriers before the agent announces a
+  BGP prefix; `confirm_bgp` then verifies that the BGP path is active via OVPN.
+  Both remain drafts until the agent and RouterOS protocol are tested together.
+  `create_guard` must never require an already-active BGP route.
 - Verify that 183.56.180.152/32 (OVPN server) uses the telecom path even after
   peer establishment and tunnel loss. The filters reject this host and both
   8.8.8.8/32 and 1.1.1.1/32. Verify all other current VPN and DNS bootstrap

@@ -25,30 +25,72 @@ func TestGuardedConfirmWaitsForWriterAndReturnsPin(t *testing.T) {
 	a.cfg.ConfirmClientIP = "127.0.0.1"
 	a.cfg.PeerIP = "192.168.88.254"
 	a.guard = guardTest(t, 2) // Explicit test injection; production enable is refused.
+	a.cfg.ConfirmMS = 2000
 	h := a.httpHandler()
 	r := httptest.NewRequest(http.MethodPost, "/confirm", strings.NewReader(`{"domain":"test.example.","ips":["8.8.8.8"],"ttl":0}`))
 	r.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() { h.ServeHTTP(w, r); close(done) }()
+	var op guardOperation
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		next := guardRequest(h, http.MethodGet, "/guardwriter/next", nil, "192.168.88.254:5")
+		if next.Code == http.StatusOK && json.Unmarshal(next.Body.Bytes(), &op) == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("guard operation not queued")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if op.Action != "create_guard" {
+		t.Fatalf("first operation: %s", op.Action)
+	}
+	select {
+	case <-pub.notify:
+		t.Fatal("published before guard proof")
+	default:
+	}
+	body, _ := json.Marshal(guardWriterAck{guardOperation: op, Result: "ok", Proof: guardProof{ExactOwner: true, GuardPresent: true}})
+	if got := guardRequest(h, http.MethodPost, "/guardwriter/ack", body, "192.168.88.254:5").Code; got != http.StatusNoContent {
+		t.Fatalf("guard ack: %d", got)
+	}
 	select {
 	case <-pub.notify:
 	case <-time.After(time.Second):
-		t.Fatal("BGP publication did not start")
+		t.Fatal("publication did not follow guard proof")
 	}
 	select {
 	case <-done:
-		t.Fatal("confirmation returned before ROS guard proof")
+		t.Fatal("answer preceded active BGP proof")
 	default:
 	}
-	next := guardRequest(h, http.MethodGet, "/guardwriter/next", nil, "192.168.88.254:5")
-	var op guardOperation
-	if next.Code != http.StatusOK || json.Unmarshal(next.Body.Bytes(), &op) != nil {
-		t.Fatalf("no guard operation: %d %s", next.Code, next.Body.String())
+	for {
+		next := guardRequest(h, http.MethodGet, "/guardwriter/next", nil, "192.168.88.254:5")
+		if next.Code == http.StatusOK && json.Unmarshal(next.Body.Bytes(), &op) == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("BGP verification not queued")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	body, _ := json.Marshal(guardWriterAck{guardOperation: op, Result: "ok", Proof: guardProof{ExactOwner: true, GuardPresent: true, BGPActive: true}})
+	if op.Action != "confirm_bgp" {
+		t.Fatalf("second operation: %s", op.Action)
+	}
+	body, _ = json.Marshal(guardWriterAck{guardOperation: op, Result: "ok", Proof: guardProof{ExactOwner: true, GuardPresent: true, BGPActive: true}})
 	if got := guardRequest(h, http.MethodPost, "/guardwriter/ack", body, "192.168.88.254:5").Code; got != http.StatusNoContent {
-		t.Fatalf("guard acknowledgement: %d", got)
+		t.Fatalf("BGP ack: %d", got)
+	}
+	health := guardRequest(h, http.MethodGet, "/guardwriter/health", nil, "192.168.88.254:5")
+	var snap guardHealthSnapshot
+	if health.Code != http.StatusOK || json.Unmarshal(health.Body.Bytes(), &snap) != nil || len(snap.Entries) != 1 {
+		t.Fatalf("health snapshot: %d %s", health.Code, health.Body.String())
+	}
+	ack, _ := json.Marshal(map[string]any{"epoch": snap.Epoch, "snapshot_id": snap.SnapshotID, "prefixes": []string{snap.Entries[0].Prefix}})
+	if got := guardRequest(h, http.MethodPost, "/guardwriter/health-ack", ack, "192.168.88.254:5").Code; got != http.StatusNoContent {
+		t.Fatalf("health ack: %d", got)
 	}
 	select {
 	case <-done:

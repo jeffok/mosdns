@@ -27,6 +27,39 @@ func guardWriterHTTP(c *guardCoordinator, peer netip.Addr) http.Handler {
 			return
 		}
 		switch r.URL.Path {
+		case "/guardwriter/batch-next":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method", http.StatusMethodNotAllowed)
+				return
+			}
+			batch, err := c.writerBatchNext()
+			if err != nil {
+				http.Error(w, "writer unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if batch == nil {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(batch)
+		case "/guardwriter/batch-ack":
+			if r.Method != http.MethodPost {
+				http.Error(w, "method", http.StatusMethodNotAllowed)
+				return
+			}
+			var ack guardBatchAck
+			d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+			d.DisallowUnknownFields()
+			if d.Decode(&ack) != nil || d.Decode(new(any)) != io.EOF {
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			if err := c.writerBatchAck(ack); err != nil {
+				http.Error(w, "ack rejected", http.StatusConflict)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		case "/guardwriter/next":
 			if r.Method != http.MethodGet {
 				http.Error(w, "method", http.StatusMethodNotAllowed)

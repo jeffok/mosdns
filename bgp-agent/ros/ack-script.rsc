@@ -12,7 +12,7 @@
             :local started [:timestamp]
             :local fetched [/tool fetch url="http://192.168.88.223:9080/desired" src-address=192.168.88.254 http-max-redirect-count=0 duration=3s idle-timeout=2s output=user as-value]
             :if (($fetched->"status") != "finished") do={ :error "desired fetch incomplete" }
-            :local desired [:deserialize from=json value=($fetched->"data")]
+            :local desired [:deserialize from=json options=json.no-string-conversion value=($fetched->"data")]
             :local epoch ($desired->"epoch")
             :local snapshotID ($desired->"snapshot_id")
             :local prefixes ($desired->"prefixes")
@@ -29,14 +29,14 @@
             :foreach route in=$snapshot do={
                 :if (([:tostr ($route->"gateway")] = "ovpn-szof") && ([:tostr ($route->"immediate-gw")] = "ovpn-szof")) do={
                     :local key [:tostr ($route->"dst-address")]
-                    :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                    :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                     :set ($activeSet->$key) true
                 }
             }
             :local accepted [:toarray ""]
             :foreach prefix in=$prefixes do={
                 :local key [:tostr $prefix]
-                :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                 :if (($activeSet->$key) = true) do={ :set accepted ($accepted, $prefix) }
             }
 

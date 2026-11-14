@@ -25,6 +25,13 @@ func guardTest(t *testing.T, capacity int) *guardCoordinator {
 func guardActivate(t *testing.T, c *guardCoordinator, p string) {
 	t.Helper()
 	r := c.data.Records[p]
+	if e := c.activate(*r.Pending, guardProof{ExactOwner: true, GuardPresent: true}); e != nil {
+		t.Fatal(e)
+	}
+	if e := c.requestBGPConfirmation([]string{p}); e != nil {
+		t.Fatal(e)
+	}
+	r = c.data.Records[p]
 	if e := c.activate(*r.Pending, guardProof{ExactOwner: true, GuardPresent: true, BGPActive: true}); e != nil {
 		t.Fatal(e)
 	}
@@ -124,8 +131,14 @@ func TestGuardRestartNeverReusesAnswerPinForSending(t *testing.T) {
 	// Simulate a future externally verified reconciliation; no production
 	// unlock implementation exists in this standalone coordinator.
 	restored.recoveryNeedsReconcile = false
-	if err := restored.finish(pin.ID); err != nil {
+	if err := restored.finish(pin.ID); err == nil {
+		t.Fatal("recovered pin abandoned before cleanup")
+	}
+	if err := restored.expireUnstartedPins(); err != nil {
 		t.Fatal(err)
+	}
+	if len(restored.data.Pins) != 0 {
+		t.Fatal("recovered pin not expired after grace")
 	}
 }
 

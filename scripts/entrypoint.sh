@@ -183,12 +183,18 @@ render_config() {
       DNS_ENTRY_SEQUENCE="main_entry"
       ROS_BGP_CONFIRM_TIMEOUT_MS="${ROS_BGP_CONFIRM_TIMEOUT_MS:-6500}"
       case "$ROS_BGP_CONFIRM_TIMEOUT_MS" in ''|*[!0-9]*) log "ERROR invalid ROS_BGP_CONFIRM_TIMEOUT_MS"; return 1 ;; esac
+      ROS_BGP_CONFIRM_TIMEOUT_MS=$(printf '%s' "$ROS_BGP_CONFIRM_TIMEOUT_MS" | sed 's/^0*//')
+      ROS_BGP_CONFIRM_TIMEOUT_MS=${ROS_BGP_CONFIRM_TIMEOUT_MS:-0}
+      [ "$ROS_BGP_CONFIRM_TIMEOUT_MS" -ge 1 ] && [ "$ROS_BGP_CONFIRM_TIMEOUT_MS" -le 30000 ] || { log "ERROR invalid ROS_BGP_CONFIRM_TIMEOUT_MS"; return 1; }
+      if [ "$BGP_GUARD_WRITER" = true ] && [ "$((MOSDNS_ENTRY_TIMEOUT_SEC * 1000))" -le "$((ROS_BGP_CONFIRM_TIMEOUT_MS + 2000))" ]; then
+        log "ERROR MOSDNS_ENTRY_TIMEOUT must exceed BGP confirmation budget by at least 2s"; return 1
+      fi
       # No source provenance is stored by the upstream cache format. Disable it
       # in BGP mode rather than risk reusing a response without its source.
       CACHE_EXEC=""
       ROS_TAG_EXEC=$(printf '%s\n' '  - exec: ttl 0-300' '  - exec: $bgp_tag')
       ROS_CN_TAG_EXEC='  - exec: $bgp_direct_tag'
-      ROS_TAG_PLUGINS=$(printf '%s\n'         '- tag: bgp_tag' '  type: ros_bgp' '  args:' '    mode: tag'         '- tag: bgp_direct_tag' '  type: ros_bgp' '  args:' '    mode: direct_tag'         '- tag: bgp_confirm' '  type: ros_bgp' '  args:' '    mode: confirm'         "    endpoint: ${ROS_BGP_CONFIRM_URL}" "    sync_budget: ${ROS_BGP_CONFIRM_TIMEOUT_MS}ms" "    cn_ip_file: ${RULES_DIR:-/etc/mosdns/rules}/IPv4.China.list")
+      ROS_TAG_PLUGINS=$(printf '%s\n'         '- tag: bgp_tag' '  type: ros_bgp' '  args:' '    mode: tag'         '- tag: bgp_direct_tag' '  type: ros_bgp' '  args:' '    mode: direct_tag'         '- tag: bgp_confirm' '  type: ros_bgp' '  args:' '    mode: confirm'         "    endpoint: ${ROS_BGP_CONFIRM_URL}" "    guard_writer: ${BGP_GUARD_WRITER}" "    sync_budget: ${ROS_BGP_CONFIRM_TIMEOUT_MS}ms" "    cn_ip_file: ${RULES_DIR:-/etc/mosdns/rules}/IPv4.China.list")
       BGP_ENTRY_PLUGIN=$(printf '%s\n' '- tag: main_entry' '  type: sequence' '  args:'         '  - exec: $main_sequence' '  - exec: $bgp_confirm')
       ;;
   esac
@@ -259,6 +265,7 @@ render_config() {
   set_scalar CACHE_DUMP_INTERVAL "$CACHE_DUMP_INTERVAL"
   set_scalar CACHE_DUMP_FILE "$CACHE_DUMP_FILE"
   set_scalar DNS_ENTRY_SEQUENCE "$DNS_ENTRY_SEQUENCE"
+  set_scalar DNS_TCP_IDLE_TIMEOUT "$DNS_TCP_IDLE_TIMEOUT"
   set_scalar DOH_LISTEN "${DOH_LISTEN:-}"
   set_scalar DOH_CERT "${DOH_CERT:-}"
   set_scalar DOH_KEY "${DOH_KEY:-}"
@@ -337,6 +344,11 @@ start_mosdns() {
 stop_mosdns() {
   [ -n "$MOSDNS_PID" ] || return 0
   kill -TERM "$MOSDNS_PID" 2>/dev/null || true
+  # A second signal can interrupt wait. Never let the supervisor leave while
+  # the old DNS writer still runs; the recovery fence depends on this.
+  while kill -0 "$MOSDNS_PID" 2>/dev/null; do
+    wait "$MOSDNS_PID" 2>/dev/null || true
+  done
   wait "$MOSDNS_PID" 2>/dev/null || true
   MOSDNS_PID=""
 }
@@ -593,6 +605,38 @@ if ! runtime_restore_lkg "$STATE/lkg" "$RULES"; then
 else
   log "restored last known good rules before starting mosdns"
 fi
+# Guard pins require the embedded agent so its JSON and plugin settings can be
+# checked as one unit. An unknown value is a configuration error, not "off".
+case "${ENABLE_ROS_BGP_GUARD:-0}" in
+  1|true|yes) BGP_GUARD_WRITER=true ;;
+  0|false|no) BGP_GUARD_WRITER=false ;;
+  *) warn "invalid ENABLE_ROS_BGP_GUARD"; exit 1 ;;
+esac
+if [ "$BGP_GUARD_WRITER" = true ]; then
+  [ "${BGP_EMBEDDED:-0}" = 1 ] || { warn "ENABLE_ROS_BGP_GUARD requires BGP_EMBEDDED=1"; exit 1; }
+  [ "$(cat /usr/share/mosdns/bgp-guard-build-mode 2>/dev/null || :)" = 1 ] || {
+    warn "guard mode requires an isolated test build; production remains disabled"; exit 1;
+  }
+  warn "guard lifecycle is experimental: use only the isolated rt-bgp-test routing table"
+  MOSDNS_ENTRY_TIMEOUT="${MOSDNS_ENTRY_TIMEOUT:-20s}"
+  case "$MOSDNS_ENTRY_TIMEOUT" in *s) MOSDNS_ENTRY_TIMEOUT_SEC=${MOSDNS_ENTRY_TIMEOUT%s} ;; *) warn "guard entry timeout must be whole seconds"; exit 1 ;; esac
+  case "$MOSDNS_ENTRY_TIMEOUT_SEC" in ''|*[!0-9]*) warn "guard entry timeout must be whole seconds"; exit 1 ;; esac
+  MOSDNS_ENTRY_TIMEOUT_SEC=$(printf '%s' "$MOSDNS_ENTRY_TIMEOUT_SEC" | sed 's/^0*//')
+  MOSDNS_ENTRY_TIMEOUT_SEC=${MOSDNS_ENTRY_TIMEOUT_SEC:-0}
+  [ "$MOSDNS_ENTRY_TIMEOUT_SEC" -ge 1 ] && [ "$MOSDNS_ENTRY_TIMEOUT_SEC" -le 30 ] || { warn "guard entry timeout must be 1s to 30s"; exit 1; }
+  MOSDNS_ENTRY_TIMEOUT="${MOSDNS_ENTRY_TIMEOUT_SEC}s"
+  export MOSDNS_ENTRY_TIMEOUT
+  DNS_TCP_IDLE_TIMEOUT="${DNS_TCP_IDLE_TIMEOUT:-30}"
+else
+  DNS_TCP_IDLE_TIMEOUT="${DNS_TCP_IDLE_TIMEOUT:-10}"
+fi
+case "$DNS_TCP_IDLE_TIMEOUT" in ''|*[!0-9]*) warn "invalid DNS_TCP_IDLE_TIMEOUT"; exit 1 ;; esac
+DNS_TCP_IDLE_TIMEOUT=$(printf '%s' "$DNS_TCP_IDLE_TIMEOUT" | sed 's/^0*//')
+DNS_TCP_IDLE_TIMEOUT=${DNS_TCP_IDLE_TIMEOUT:-0}
+[ "$DNS_TCP_IDLE_TIMEOUT" -ge 1 ] && [ "$DNS_TCP_IDLE_TIMEOUT" -le 120 ] || { warn "DNS_TCP_IDLE_TIMEOUT must be 1 to 120 seconds"; exit 1; }
+if [ "$BGP_GUARD_WRITER" = true ] && [ "$DNS_TCP_IDLE_TIMEOUT" -le "$MOSDNS_ENTRY_TIMEOUT_SEC" ]; then
+  warn "DNS_TCP_IDLE_TIMEOUT must exceed MOSDNS_ENTRY_TIMEOUT"; exit 1
+fi
 # Combined mode is explicit; legacy standalone DNS behaviour remains unchanged.
 if [ "${BGP_EMBEDDED:-0}" = 1 ]; then
   case "${ENABLE_ROS_BGP:-0}" in 1|true|yes) ;; *) warn "BGP_EMBEDDED requires ENABLE_ROS_BGP"; exit 1 ;; esac
@@ -611,13 +655,15 @@ if [ "${BGP_EMBEDDED:-0}" = 1 ]; then
   BGP_AGENT_CONFIG="${BGP_AGENT_CONFIG:-/etc/mosdns/bgp-agent.json}"
   [ -n "${BGP_LOCAL_IP:-}" ] || { warn "BGP_LOCAL_IP required for combined mode"; exit 1; }
   [ -r "$BGP_AGENT_CONFIG" ] || { warn "BGP agent configuration missing"; exit 1; }
-  if ! jq -e --arg local "$BGP_LOCAL_IP" '
+  if ! jq -e --arg local "$BGP_LOCAL_IP" --argjson guard "$BGP_GUARD_WRITER" '
     .confirm_client_ip == "127.0.0.1" and
     .local_ip == $local and .next_hop == $local and
     .dns_listen == "127.0.0.1:1053" and .http_listen == "0.0.0.0:9080" and
-    .warm_domains == []
+    .warm_domains == [] and
+    ((.guard_gc_enabled // false) == $guard) and
+    (if $guard then .guard_test_table == "rt-bgp-test" else true end)
   ' "$BGP_AGENT_CONFIG" >/dev/null; then
-    warn "invalid combined BGP config: check local IP, loopback confirm, listeners and empty warm_domains"; exit 1
+    warn "invalid combined BGP config: check local IP, loopback confirm, listeners, empty warm_domains and guard setting"; exit 1
   fi
   log "starting embedded BGP agent"
   /usr/bin/bgp-agent -config "$BGP_AGENT_CONFIG" &

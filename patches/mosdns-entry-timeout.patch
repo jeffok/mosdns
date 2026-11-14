@@ -1,0 +1,28 @@
+diff --git a/plugin/server/server_utils/handler.go b/plugin/server/server_utils/handler.go
+index bbc6eab..61e1b8e 100644
+--- a/plugin/server/server_utils/handler.go
++++ b/plugin/server/server_utils/handler.go
+@@ -21,6 +21,8 @@ package server_utils
+ 
+ import (
+ 	"fmt"
++	"os"
++	"time"
+ 
+ 	"github.com/IrineSistiana/mosdns/v5/coremain"
+ 	"github.com/IrineSistiana/mosdns/v5/pkg/server"
+@@ -39,5 +41,14 @@ func NewHandler(bp *coremain.BP, entry string) (server.Handler, error) {
+ 		Logger: bp.L(),
+ 		Entry:  exec,
+ 	}
++	// BGP route confirmation may need more than the upstream five-second
++	// entry deadline. Keep upstream behavior unless explicitly configured.
++	if raw := os.Getenv("MOSDNS_ENTRY_TIMEOUT"); raw != "" {
++		timeout, err := time.ParseDuration(raw)
++		if err != nil || timeout < time.Second || timeout > 30*time.Second {
++			return nil, fmt.Errorf("invalid MOSDNS_ENTRY_TIMEOUT %q", raw)
++		}
++		handlerOpts.QueryTimeout = timeout
++	}
+ 	return server_handler.NewEntryHandler(handlerOpts), nil
+ }

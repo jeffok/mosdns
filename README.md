@@ -66,6 +66,7 @@ Compose 使用 host 网络，默认监听 `0.0.0.0:53`。主机 53 端口需要�
 | `RESTART_TIMEOUT` | `20` 秒 | 应用规则后的健康检查 |
 | `DOH_ENABLED` / `DOH_CERT` / `DOH_KEY` / `DOH_LISTEN` | `0` / 默认证书路径 / 默认私钥路径 / `0.0.0.0:8443` | 可选 DoH |
 | `ENABLE_ROS_BGP` / `BGP_EMBEDDED` | `0` / `0` | 启用 BGP 应答确认及同容器 agent；联合模式两者均设为 `1` |
+| `ENABLE_ROS_BGP_GUARD` | `0` | 仅隔离验证镜像可启用，必须与 agent `guard_gc_enabled` 一致、路由表为 `rt-bgp-test`；生产镜像不支持，勿投入生产 |
 | `BGP_LOCAL_IP` | 空 | 联合模式必填，必须与 agent 配置的 local_ip、next_hop 一致 |
 | `BGP_AGENT_CONFIG` | `/etc/mosdns/bgp-agent.json` | 联合模式 agent JSON 配置路径 |
 | `ROS_BGP_CONFIRM_URL` | 联合模式为 `http://127.0.0.1:9080/confirm` | 联合模式只允许此本机确认端点 |

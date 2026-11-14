@@ -275,4 +275,5 @@ plugins:
   args:
     entry: %DNS_ENTRY_SEQUENCE%
     listen: %DNS_ENTRY_LISTEN%
+    idle_timeout: %DNS_TCP_IDLE_TIMEOUT%
 %DOH_PLUGIN%

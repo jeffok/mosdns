@@ -11,7 +11,7 @@
         :do {
             :local fetched [/tool fetch url="http://192.168.88.222:9080/guardgc/next" src-address=192.168.88.254 http-max-redirect-count=0 duration=3s idle-timeout=2s output=user as-value]
             :if (($fetched->"status") != "finished") do={ :error "guard GC fetch incomplete" }
-            :local op [:deserialize from=json value=($fetched->"data")]
+            :local op [:deserialize from=json options=json.no-string-conversion value=($fetched->"data")]
             :if (($op->"version") != 1) do={ :error "unsupported guard GC protocol" }
             :local action ($op->"action")
             :if ($action != "idle") do={
@@ -30,7 +30,7 @@
                 :if (($prefixType != "str") && ($prefixType != "ip-prefix")) do={ :error "invalid prefix type" }
                 :local prefix [:tostr $rawPrefix]
                 :local slash [:find $prefix "/"]
-                :if ($slash = nil) do={
+                :if ([:typeof $slash] = "nil") do={
                     :if ($prefixType != "ip-prefix") do={ :error "missing /32" }
                     :set prefix ($prefix . "/32")
                     :set slash [:find $prefix "/"]
@@ -53,7 +53,7 @@
                     # same prefix; it may block traffic after this op ends.
                     :foreach existing in=[/ip firewall filter find where comment~"^BGP-PROD-GC:"] do={
                         :local label [:tostr [/ip firewall filter get $existing comment]]
-                        :if (([:find $label (":" . $p . ":")] != nil) && ([:find $label ("BGP-PROD-GC:" . $g . ":" . $p . ":")] != 0)) do={ :error "stale-generation barrier" }
+                        :if (([:typeof [:find $label (":" . $p . ":")]] != "nil") && ([:find $label ("BGP-PROD-GC:" . $g . ":" . $p . ":")] != 0)) do={ :error "stale-generation barrier" }
                     }
                     :foreach chain in={ "forward"; "output" } do={
                         :local anchorName ("BGP-PROD-GC-ANCHOR:" . $chain)
@@ -74,7 +74,7 @@
                             :if ([:len $found] != 1) do={ :error "barrier add/readback failed" }
                             :local rule ($found->0)
                             :local dst [:tostr [/ip firewall filter get $rule dst-address]]
-                            :if ([:find $dst "/"] = nil) do={ :set dst ($dst . "/32") }
+                            :if ([:typeof [:find $dst "/"]] = "nil") do={ :set dst ($dst . "/32") }
                             :if (([/ip firewall filter get $rule chain] != $chain) || ([/ip firewall filter get $rule action] != "drop") || ([/ip firewall filter get $rule disabled] != false) || ($dst != $p) || ([:tostr [/ip firewall filter get $rule connection-state]] != $state)) do={ :error "invalid barrier readback" }
                             # Check the barrier itself occurs before its anchor.
                             :local list [/ip firewall filter print as-value where chain=$chain]
@@ -113,7 +113,7 @@
                             :local text [:tostr $value]
                             :if ([:len $text] = 0) do={ :error "empty conntrack tuple" }
                             :local sep [:find $text ":"]
-                            :if ($sep != nil) do={ :set text [:pick $text 0 $sep] }
+                            :if ([:typeof $sep] != "nil") do={ :set text [:pick $text 0 $sep] }
                             :if ($text = $target) do={ :set matched true }
                         }
                         :if ($matched = true) do={ :set count ($count + 1) }

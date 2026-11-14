@@ -136,52 +136,42 @@ index 0000000..baabab9
 +	}
 +}
 diff --git a/pkg/server/tcp.go b/pkg/server/tcp.go
-index 8af18bd..6373787 100644
+index 8af18bd..f3f1d1d 100644
 --- a/pkg/server/tcp.go
 +++ b/pkg/server/tcp.go
-@@ -101,13 +101,19 @@ func ServeTCP(l net.Listener, h Handler, opts TCPServerOpts) error {
- 					if ok {
- 						clientAddr = ta.AddrPort().Addr()
- 					}
+@@ -31,0 +32 @@ import (
++	"github.com/miekg/dns"
+@@ -104 +105,2 @@ func ServeTCP(l net.Listener, h Handler, opts TCPServerOpts) error {
 -					r := h.Handle(tcpConnCtx, req, QueryMeta{ClientAddr: clientAddr, ServerName: serverName}, pool.PackTCPBuffer)
 +					sendCtx, hooks := WithSendHooks(tcpConnCtx)
 +					r := h.Handle(sendCtx, req, QueryMeta{ClientAddr: clientAddr, ServerName: serverName}, pool.PackTCPBuffer)
- 					if r == nil {
- 						c.Close() // abort the connection
- 						return
- 					}
- 					defer pool.ReleaseBuf(r)
- 
+@@ -110,0 +113,10 @@ func ServeTCP(l net.Listener, h Handler, opts TCPServerOpts) error {
 +					if !hooks.Before() {
-+						c.Close()
++						failure := new(dns.Msg)
++						failure.SetRcode(req, dns.RcodeServerFailure)
++						if packed, err := pool.PackTCPBuffer(failure); err == nil {
++							defer pool.ReleaseBuf(packed)
++							_, _ = c.Write(*packed)
++						}
 +						return
 +					}
 +					defer hooks.After()
- 					if _, err := c.Write(*r); err != nil {
- 						logger.Warn("failed to write response", zap.Stringer("client", c.RemoteAddr()), zap.Error(err))
- 						return
 diff --git a/pkg/server/udp.go b/pkg/server/udp.go
-index aee5675..661225c 100644
+index aee5675..e950945 100644
 --- a/pkg/server/udp.go
 +++ b/pkg/server/udp.go
-@@ -88,7 +88,8 @@ func ServeUDP(c *net.UDPConn, h Handler, opts UDPServerOpts) error {
- 
- 		// handle query
- 		go func() {
+@@ -91 +91,2 @@ func ServeUDP(c *net.UDPConn, h Handler, opts UDPServerOpts) error {
 -			payload := h.Handle(listenerCtx, q, QueryMeta{ClientAddr: remoteAddr.Addr(), FromUDP: true}, pool.PackBuffer)
 +			sendCtx, hooks := WithSendHooks(listenerCtx)
 +			payload := h.Handle(sendCtx, q, QueryMeta{ClientAddr: remoteAddr.Addr(), FromUDP: true}, pool.PackBuffer)
- 			if payload == nil {
- 				return
- 			}
-@@ -98,6 +99,10 @@ func ServeUDP(c *net.UDPConn, h Handler, opts UDPServerOpts) error {
- 			if oobWriter != nil && dstIpFromCm != nil {
- 				oob = oobWriter(dstIpFromCm)
- 			}
+@@ -100,0 +102,10 @@ func ServeUDP(c *net.UDPConn, h Handler, opts UDPServerOpts) error {
 +			if !hooks.Before() {
++				failure := new(dns.Msg)
++				failure.SetRcode(q, dns.RcodeServerFailure)
++				if packed, err := pool.PackBuffer(failure); err == nil {
++					defer pool.ReleaseBuf(packed)
++					_, _, _ = c.WriteMsgUDPAddrPort(*packed, oob, remoteAddr)
++				}
 +				return
 +			}
 +			defer hooks.After()
- 			if _, _, err := c.WriteMsgUDPAddrPort(*payload, oob, remoteAddr); err != nil {
- 				logger.Warn("failed to write response", zap.Stringer("client", remoteAddr), zap.Error(err))
- 			}

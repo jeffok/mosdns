@@ -1,0 +1,4 @@
+{"domain":"bytegle.tech","dns":"NOERROR","transport":"udp","udp_truncated":false,"dns_ms":75,"udp_ms":75}
+{"domain":"tv2.no","dns":"NOERROR","ips":["5.44.65.150"],"min_answer_ttl":296,"transport":"udp","udp_truncated":false,"dns_ms":4275,"udp_ms":4275}
+{"domain":"akc.org","dns":"NOERROR","ips":["23.185.0.4"],"min_answer_ttl":296,"transport":"udp","udp_truncated":false,"dns_ms":4214,"udp_ms":4214}
+{"domain":"frontiersin.org","dns":"NOERROR","ips":["20.105.75.30"],"min_answer_ttl":296,"transport":"udp","udp_truncated":false,"dns_ms":4317,"udp_ms":4317}

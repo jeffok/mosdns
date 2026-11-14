@@ -26,13 +26,19 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download && go mod verify
 COPY bgp-agent/*.go ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go test ./...
 ARG TARGETOS TARGETARCH TARGETVARIANT
+# 1 enables incomplete guard code for isolated ROS table testing only.
+# Normal images never enable the test code, regardless of runtime env vars.
+ARG BGP_GUARD_TEST_BUILD=0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    case "$BGP_GUARD_TEST_BUILD" in 0|1) ;; *) echo "invalid BGP_GUARD_TEST_BUILD" >&2; exit 1 ;; esac && \
     GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
-    go build -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w' -o /out/bgp-agent .
+    go build -mod=readonly -buildvcs=false -trimpath -ldflags="-s -w -X main.guardTestBuild=$BGP_GUARD_TEST_BUILD" -o /out/bgp-agent . && \
+    printf '%s\n' "$BGP_GUARD_TEST_BUILD" > /out/bgp-guard-build-mode
 
 FROM irinesistiana/mosdns:v5.3.4@sha256:26bd5326578f6b1121dc8a503b30fd4edeedb41a409442b20e6f186e4386c4a4
 COPY --from=mosdns-build /out/mosdns /usr/bin/mosdns
 COPY --from=bgp-build /out/bgp-agent /usr/bin/bgp-agent
+COPY --from=bgp-build /out/bgp-guard-build-mode /usr/share/mosdns/bgp-guard-build-mode
 
 RUN apk add --no-cache tzdata jq \
  && rm -rf /var/cache/apk/* /tmp/*

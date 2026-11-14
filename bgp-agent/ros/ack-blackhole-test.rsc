@@ -11,7 +11,7 @@
             :local started [:timestamp]
             :local fetched [/tool fetch url="http://192.168.88.223:9080/desired" src-address=192.168.88.254 http-max-redirect-count=0 duration=3s idle-timeout=2s output=user as-value]
             :if (($fetched->"status") != "finished") do={ :error "desired fetch incomplete" }
-            :local desired [:deserialize from=json value=($fetched->"data")]
+            :local desired [:deserialize from=json options=json.no-string-conversion value=($fetched->"data")]
             :local epoch ($desired->"epoch")
             :local snapshotID ($desired->"snapshot_id")
             :local prefixes ($desired->"prefixes")
@@ -26,7 +26,7 @@
             :foreach route in=$before do={
                 :if (([:tostr ($route->"gateway")] = "ovpn-szof") && ([:tostr ($route->"immediate-gw")] = "ovpn-szof") && (($route->"distance") = 20)) do={
                     :local key [:tostr ($route->"dst-address")]
-                    :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                    :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                     :set ($activeSet->$key) true
                 }
             }
@@ -49,7 +49,7 @@
                 :if (($prefixType != "str") && ($prefixType != "ip-prefix")) do={ :error "invalid desired prefix type" }
                 :local key [:tostr $prefix]
                 :local slash [:find $key "/"]
-                :if ($slash = nil) do={
+                :if ([:typeof $slash] = "nil") do={
                     :if ($prefixType != "ip-prefix") do={ :error "missing host mask" }
                     :set key ($key . "/32")
                     :set slash [:find $key "/"]
@@ -89,7 +89,7 @@
                 :if (($seen->$comment) = true) do={ :error "duplicate guard owner on readback" }
                 :set ($seen->$comment) true
                 :local key [:tostr ($route->"dst-address")]
-                :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                 :local id [:tostr ($route->".id")]
                 :if (($comment = ("BGP-TEST-BH:" . $key)) && (($goodIds->$id) = true)) do={
                     :set ($verified->$key) true
@@ -103,7 +103,7 @@
             :foreach route in=$after do={
                 :if (([:tostr ($route->"gateway")] = "ovpn-szof") && ([:tostr ($route->"immediate-gw")] = "ovpn-szof") && (($route->"distance") = 20)) do={
                     :local key [:tostr ($route->"dst-address")]
-                    :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                    :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                     :set ($activeAfter->$key) true
                     :local id [:tostr ($route->".id")]
                     :set ($bgpIds->$id) true
@@ -116,14 +116,14 @@
                 :local id [:tostr ($route->".id")]
                 :if (($bgpIds->$id) != true) do={
                     :local key [:tostr ($route->"dst-address")]
-                    :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                    :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                     :set ($conflict->$key) true
                 }
             }
             :local accepted [:toarray ""]
             :foreach prefix in=$prefixes do={
                 :local key [:tostr $prefix]
-                :if ([:find $key "/"] = nil) do={ :set key ($key . "/32") }
+                :if ([:typeof [:find $key "/"]] = "nil") do={ :set key ($key . "/32") }
                 :if ((($verified->$key) = true) && (($activeAfter->$key) = true) && (($conflict->$key) != true)) do={ :set accepted ($accepted, $key) }
             }
             :if (([:timestamp] - $verifyStarted) > 1s) do={ :error "route readback too old" }

@@ -138,6 +138,10 @@ func currentEpoch(a *app) string {
 
 func TestEnsureWaitsForROSActiveRouteAcknowledgement(t *testing.T) {
 	a, pub := testApp(t)
+	// Container filesystem fsync can legitimately take longer than the generic
+	// 120 ms fixture timeout. Give this ACK-order test a realistic budget and
+	// deliberately hold the ACK beyond that old limit.
+	a.cfg.ConfirmMS = 2000
 	ip := netip.MustParseAddr("8.8.8.8")
 	done := make(chan error, 1)
 	go func() { done <- a.ensure(context.Background(), "github.com.", []netip.Addr{ip}, 300, true) }()
@@ -152,7 +156,7 @@ func TestEnsureWaitsForROSActiveRouteAcknowledgement(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("DNS route gate returned before ROS acknowledgement: %v", err)
-	case <-time.After(20 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 	}
 	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
 		t.Fatal(err)
@@ -162,7 +166,7 @@ func TestEnsureWaitsForROSActiveRouteAcknowledgement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("fresh ROS acknowledgement did not release DNS gate")
 	}
 	if err := a.ensure(context.Background(), "api.github.com.", []netip.Addr{ip}, 60, true); err != nil {
@@ -433,6 +437,21 @@ func TestPersistenceFailurePreventsPositiveAnswer(t *testing.T) {
 	case <-pub.notify:
 	case <-time.After(time.Second):
 		t.Fatal("publish timed out")
+	}
+	// fakePublication notifies before ensure installs the lease in a.routes.
+	// Wait for that installation before taking the router snapshot.
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		ready := a.routes["8.8.8.8/32"] != nil
+		a.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("route lease installation timed out")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
 		t.Fatal(err)

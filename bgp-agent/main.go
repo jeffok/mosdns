@@ -35,6 +35,13 @@ import (
 
 const version = "bgp-unified-20261114.1"
 
+// Only isolated test builds may opt into the unfinished guarded writer.
+var guardTestBuild string
+
+func guardedTestAllowed(c config) bool {
+	return guardTestBuild == "1" && c.GuardTestTable == "rt-bgp-test" && c.ConfirmClientIP != ""
+}
+
 type config struct {
 	LocalIP         string   `json:"local_ip"`
 	PeerIP          string   `json:"peer_ip"`
@@ -44,7 +51,8 @@ type config struct {
 	DNSListen       string   `json:"dns_listen"`
 	HTTPListen      string   `json:"http_listen"`
 	ConfirmClientIP string   `json:"confirm_client_ip"` // empty disables /confirm
-	GuardGCEnabled  bool     `json:"guard_gc_enabled"`  // currently unavailable; startup rejects true
+	GuardGCEnabled  bool     `json:"guard_gc_enabled"`  // enabled only in isolated test builds
+	GuardTestTable  string   `json:"guard_test_table"`
 	Upstreams       []string `json:"upstreams"`
 	Warm            []string `json:"warm_domains"`
 	CNFile          string   `json:"cn_file"`
@@ -71,10 +79,15 @@ type cached struct {
 	stored, expires time.Time
 }
 type routeSnapshot struct {
-	epoch    string
-	issued   time.Time // retains Go's monotonic clock reading
-	sequence uint64
-	prefixes map[string]uint64
+	epoch            string
+	issued           time.Time // retains Go's monotonic clock reading
+	sequence         uint64
+	prefixes         map[string]uint64
+	guardGenerations map[string]string
+	guardBulk        bool
+	healthTotalPages int
+	healthNextPage   int
+	healthAccepted   []string
 }
 type publication interface {
 	Add(string) ([]byte, error)
@@ -119,6 +132,7 @@ type app struct {
 	routes                                     map[string]*lease
 	durableUntil                               map[string]time.Time
 	durableGeneration                          map[string]uint64
+	withdrawnGuardOps                          map[string]string // locally confirmed deletions awaiting durable state
 	cache                                      map[string]cached
 	epoch                                      string
 	snapshots                                  map[string]routeSnapshot
@@ -127,6 +141,7 @@ type app struct {
 	up                                         bool
 	pub                                        publication
 	guard                                      *guardCoordinator // prototype only; startup still rejects guard mode
+	recovery                                   *recoveryHTTP
 	cn                                         []netip.Prefix
 	flight                                     singleflight.Group
 	stop                                       chan struct{}
@@ -144,8 +159,8 @@ func token() string {
 func newApp(c config, p publication) (*app, error) {
 	// Never run the legacy answer path with experimental cleanup requested: the
 	// coordinator is not yet connected to the DNS send pin or trusted ROS writer.
-	if c.GuardGCEnabled {
-		return nil, errors.New("guard_gc_enabled is unavailable: protected writer and recovery are not integrated")
+	if c.GuardGCEnabled && !guardedTestAllowed(c) {
+		return nil, errors.New("guard_gc_enabled is unavailable: isolated guard test build and table required")
 	}
 	if c.TTLMax == 0 || c.TTLMax > 300 || c.RetainSeconds < 300 || c.ConfirmMS < 1 || c.ConfirmMS > 30000 || c.AckMaxAgeMS < 1 || c.MaxRoutes < 1 {
 		return nil, errors.New("invalid TTL/retention/confirmation/capacity configuration")
@@ -168,6 +183,18 @@ func newApp(c config, p publication) (*app, error) {
 		}
 	}
 	a := &app{cfg: c, routes: map[string]*lease{}, durableUntil: map[string]time.Time{}, durableGeneration: map[string]uint64{}, cache: map[string]cached{}, snapshots: map[string]routeSnapshot{}, epoch: token(), pub: p, stop: make(chan struct{})}
+	if c.GuardGCEnabled {
+		peer, err := netip.ParseAddr(c.PeerIP)
+		if err != nil || !peer.Is4() || peer.IsUnspecified() {
+			return nil, errors.New("invalid guarded test peer")
+		}
+		guard, err := newGuardCoordinator(c.StateFile+".guard", c.MaxRoutes, time.Duration(c.TTLMax)*time.Second, 2*time.Second, time.Second, 2*time.Second, time.Duration(c.RetainSeconds)*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("guard journal: %w", err)
+		}
+		a.guard = guard
+		a.recovery = &recoveryHTTP{c: guard, peer: peer}
+	}
 	b, e := os.ReadFile(c.CNFile)
 	if e != nil {
 		return nil, e
@@ -200,20 +227,9 @@ func newApp(c config, p publication) (*app, error) {
 			if len(a.routes) >= c.MaxRoutes {
 				return nil, errors.New("saved routes exceed limit")
 			}
-			r.AckAt = time.Time{}
-			id, e := p.Add(r.Prefix)
-			if e != nil {
+			if e := a.loadSavedLease(r, !c.GuardGCEnabled); e != nil {
 				return nil, e
 			}
-			r.UUID = id
-			a.routeGeneration++
-			r.generation = a.routeGeneration
-			if r.References == nil {
-				r.References = map[string]time.Time{}
-			}
-			a.routes[r.Prefix] = &r
-			a.durableUntil[r.Prefix] = r.AnswerUntil
-			a.durableGeneration[r.Prefix] = r.generation
 		}
 	} else if !os.IsNotExist(e) {
 		return nil, e
@@ -221,13 +237,40 @@ func newApp(c config, p publication) (*app, error) {
 	return a, nil
 }
 
+// loadSavedLease in guarded mode never publishes on its own. Replay is permitted
+// only through replayGuardedPrefixes after recovery has verified the guard.
+func (a *app) loadSavedLease(r lease, publish bool) error {
+	r.AckAt = time.Time{}
+	r.UUID = nil
+	if publish {
+		id, err := a.pub.Add(r.Prefix)
+		if err != nil {
+			return err
+		}
+		r.UUID = id
+	}
+	a.routeGeneration++
+	r.generation = a.routeGeneration
+	if r.References == nil {
+		r.References = map[string]time.Time{}
+	}
+	a.routes[r.Prefix] = &r
+	a.durableUntil[r.Prefix] = r.AnswerUntil
+	a.durableGeneration[r.Prefix] = r.generation
+	return nil
+}
+
 // The HTTP write deadline starts after reading request headers and covers the
 // remainder of the request and handler. Allow a bounded body-read window and
 // the configured route-confirmation budget, rather than cutting a successful
 // confirmation short at the previous fixed three seconds.
 func newHTTPServer(c config, handler http.Handler) *http.Server {
+	writeTimeout := time.Duration(c.ConfirmMS)*time.Millisecond + 4*time.Second
+	if c.GuardGCEnabled && guardedTestAllowed(c) {
+		writeTimeout = 65 * time.Second
+	}
 	return &http.Server{Addr: c.HTTPListen, Handler: handler, ReadHeaderTimeout: 2 * time.Second,
-		ReadTimeout: 3 * time.Second, WriteTimeout: time.Duration(c.ConfirmMS)*time.Millisecond + 4*time.Second}
+		ReadTimeout: 3 * time.Second, WriteTimeout: writeTimeout}
 }
 
 var excluded = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4")}
@@ -275,6 +318,21 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(a.cfg.ConfirmMS)*time.Millisecond)
 	defer cancel()
+	keys := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		keys = append(keys, netip.PrefixFrom(ip, 32).String())
+	}
+	if a.guard != nil {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for !a.guard.guardsReady(keys) {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("ROS guard confirmation: %w", ctx.Err())
+			case <-tick.C:
+			}
+		}
+	}
 	a.workOnce.Do(func() { a.work = make(chan struct{}, 1) })
 	select {
 	case a.work <- struct{}{}:
@@ -322,7 +380,9 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 		return errors.New("route capacity reached")
 	}
 	a.mu.Unlock()
-	keys := make([]string, 0, len(ips))
+	if a.guard != nil && !a.guard.guardsReady(keys) {
+		return errors.New("ROS guard changed before publication")
+	}
 	for _, ip := range ips {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -387,7 +447,11 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 			}
 		}
 		a.mu.Unlock()
-		keys = append(keys, key)
+	}
+	if a.guard != nil {
+		if err := a.guard.requestBGPConfirmation(keys); err != nil {
+			return err
+		}
 	}
 	<-a.work
 	held = false
@@ -401,7 +465,7 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 		ready := a.up
 		for _, k := range keys {
 			r := a.routes[k]
-			if r == nil || (a.guard == nil && (r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond)) {
+			if r == nil || r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond {
 				ready = false
 			}
 		}
@@ -430,7 +494,7 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 			ready = a.up
 			for _, k := range keys {
 				r := a.routes[k]
-				if r == nil || (a.guard == nil && (r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond)) || r.generation != a.durableGeneration[k] || r.AnswerUntil.After(a.durableUntil[k]) {
+				if r == nil || r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond || r.generation != a.durableGeneration[k] || r.AnswerUntil.After(a.durableUntil[k]) {
 					ready = false
 				}
 			}
@@ -485,6 +549,9 @@ func (a *app) issueSnapshot() (string, string, []string, error) {
 func (a *app) acknowledge(epoch, snapshotID string, prefixes []string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.acknowledgeLocked(epoch, snapshotID, prefixes)
+}
+func (a *app) acknowledgeLocked(epoch, snapshotID string, prefixes []string) error {
 	if !a.up || epoch != a.epoch {
 		return errors.New("stale BGP epoch")
 	}
@@ -593,9 +660,8 @@ func (a *app) save() (err error) {
 	return nil
 }
 func (a *app) gc(now time.Time) {
-	// Until protected withdrawal is connected, legacy GC must never withdraw a
-	// route governed by guard pins. Capacity exhaustion is safer than leakage.
 	if a.guard != nil {
+		a.guardGC(now)
 		return
 	}
 	a.mu.Lock()
@@ -672,14 +738,24 @@ func (a *app) dispatchGuardWithdrawal() error {
 		defer func() { <-a.work }()
 		a.mu.Lock()
 		r := a.routes[op.Prefix]
+		deletedByThisOp := a.withdrawnGuardOps[op.Prefix] == op.ID
 		a.mu.Unlock()
 		if r == nil {
-			return errors.New("withdrawal route unavailable")
+			if !deletedByThisOp {
+				return errors.New("withdrawal route unavailable")
+			}
+			// The previous attempt deleted the path but failed to save. Retry
+			// persistence, never infer deletion from an arbitrary missing lease.
+			return a.save()
 		}
 		if err := a.pub.Delete(r.UUID); err != nil {
 			return err
 		}
 		a.mu.Lock()
+		if a.withdrawnGuardOps == nil {
+			a.withdrawnGuardOps = make(map[string]string)
+		}
+		a.withdrawnGuardOps[op.Prefix] = op.ID
 		delete(a.routes, op.Prefix)
 		a.dirty = true
 		a.mu.Unlock()
@@ -936,6 +1012,21 @@ func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 	}
 	_ = writeDNSResponse(w, q, m)
 }
+
+// Report only slow handlers, without URL/query or DNS names.
+func guardMeasured(label string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		if guardTestBuild == "1" {
+			log.Printf("guard HTTP %s start=%s", label, started.Format(time.RFC3339Nano))
+		}
+		h.ServeHTTP(w, r)
+		if elapsed := time.Since(started); elapsed >= 100*time.Millisecond || guardTestBuild == "1" {
+			log.Printf("guard HTTP %s elapsed=%s", label, elapsed)
+		}
+	})
+}
+
 func (a *app) httpHandler() http.Handler {
 	mux := http.NewServeMux()
 	if a.guard != nil {
@@ -946,8 +1037,16 @@ func (a *app) httpHandler() http.Handler {
 		mux.Handle("/guardpin/finish-sent", pin)
 		mux.Handle("/guardpin/abandon", pin)
 		writer := guardWriterHTTP(a.guard, peer)
-		mux.Handle("/guardwriter/next", writer)
-		mux.Handle("/guardwriter/ack", writer)
+		mux.Handle("/guardwriter/batch-next", guardMeasured("batch-next", writer))
+		mux.Handle("/guardwriter/batch-ack", guardMeasured("batch-ack", writer))
+		mux.Handle("/guardwriter/next", guardMeasured("next", writer))
+		mux.Handle("/guardwriter/ack", guardMeasured("ack", writer))
+		mux.Handle("/guardwriter/health", guardMeasured("health", http.HandlerFunc(a.guardHealthHTTP)))
+		mux.Handle("/guardwriter/health-ack", guardMeasured("health-ack", http.HandlerFunc(a.guardHealthHTTP)))
+		if a.recovery != nil {
+			mux.Handle("/guardrecovery/next", guardMeasured("recovery-next", a.recovery))
+			mux.Handle("/guardrecovery/attest", guardMeasured("recovery-attest", a.recovery))
+		}
 	}
 	// Reserved fail-closed interfaces only; no state machine operation is
 	// exposed before writer authentication, DNS pinning and recovery exist.
@@ -1047,10 +1146,11 @@ func (a *app) httpHandler() http.Handler {
 			for _, ip := range ips {
 				prefixes = append(prefixes, netip.PrefixFrom(ip, 32).String())
 			}
-			if err := a.guard.prepare(prefixes); err != nil {
+			if err := a.guard.prepareForRequest(prefixes); err != nil {
 				http.Error(w, "guard preparation failed", http.StatusServiceUnavailable)
 				return
 			}
+			defer a.releaseGuardRequest(prefixes)
 		}
 		if err := a.ensure(r.Context(), strings.ToLower(req.Domain), ips, *req.TTL, true); err != nil {
 			log.Printf("confirmation blocked domain=%s error=%v", req.Domain, err)
@@ -1089,6 +1189,10 @@ func (a *app) httpHandler() http.Handler {
 		json.NewEncoder(w).Encode(map[string]any{"version": version, "peer_up": a.up, "epoch": a.epoch, "routes": a.routes, "requests": a.requests.Load(), "cache_hits": a.hits.Load(), "failures": a.failures.Load(), "publications": a.adds.Load(), "gc_dry_run": a.cfg.GCDryRun, "gc_candidates": a.candidates.Load()})
 	})
 	mux.HandleFunc("/desired", func(w http.ResponseWriter, r *http.Request) {
+		if a.guard != nil {
+			http.Error(w, "legacy confirmation disabled", http.StatusServiceUnavailable)
+			return
+		}
 		if r.Method != "GET" {
 			http.Error(w, "method", 405)
 			return
@@ -1113,6 +1217,10 @@ func (a *app) httpHandler() http.Handler {
 		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("/ack", func(w http.ResponseWriter, r *http.Request) {
+		if a.guard != nil {
+			http.Error(w, "legacy confirmation disabled", http.StatusServiceUnavailable)
+			return
+		}
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if r.Method != "POST" || host != a.cfg.PeerIP {
 			http.Error(w, "forbidden", 403)
@@ -1174,6 +1282,29 @@ func (a *app) background() {
 			}
 		}
 	}()
+	if a.guard != nil && a.recovery != nil {
+		a.startGuardRecovery()
+	}
+	// Guard mode dispatches at most one already journaled local withdrawal per
+	// tick. A failure retains its barrier and operation for safe retry.
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-a.stop:
+				return
+			case <-tick.C:
+				if a.guard != nil && !a.cfg.GCDryRun {
+					if err := a.dispatchGuardWithdrawal(); err != nil {
+						log.Printf("guard withdrawal deferred: %v", err)
+					}
+				}
+			}
+		}
+	}()
 	for _, name := range a.cfg.Warm {
 		a.wg.Add(1)
 		go func(name string) {
@@ -1218,8 +1349,15 @@ func run(path string) error {
 	if e = json.Unmarshal(b, &c); e != nil {
 		return e
 	}
+	if c.GuardGCEnabled && !guardedTestAllowed(c) {
+		return errors.New("guard_gc_enabled is unavailable: isolated guard test build and table required")
+	}
 	if c.GuardGCEnabled {
-		return errors.New("guard_gc_enabled is unavailable: protected writer and recovery are not integrated")
+		lock, err := acquireGuardProcessLock(c.StateFile)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
 	}
 	for _, ip := range []string{c.LocalIP, c.PeerIP, c.NextHop} {
 		if _, e := netip.ParseAddr(ip); e != nil {

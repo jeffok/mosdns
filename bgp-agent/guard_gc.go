@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -26,15 +27,16 @@ type guardOperation struct {
 	Action            string `json:"action"`
 }
 type guardRecord struct {
-	Prefix        string          `json:"prefix"`
-	Generation    string          `json:"generation"`
-	Phase         string          `json:"phase"`
-	AnswerUntil   time.Time       `json:"answer_until"`
-	RetainUntil   time.Time       `json:"retain_until"`
-	Pending       *guardOperation `json:"pending,omitempty"`
-	LastOperation *guardOperation `json:"last_operation,omitempty"`
-	Observation   *guardOperation `json:"observation,omitempty"`
-	LastWriter    *guardOperation `json:"last_writer,omitempty"`
+	Prefix           string          `json:"prefix"`
+	Generation       string          `json:"generation"`
+	Phase            string          `json:"phase"`
+	CreateDispatched bool            `json:"create_dispatched,omitempty"`
+	AnswerUntil      time.Time       `json:"answer_until"`
+	RetainUntil      time.Time       `json:"retain_until"`
+	Pending          *guardOperation `json:"pending,omitempty"`
+	LastOperation    *guardOperation `json:"last_operation,omitempty"`
+	Observation      *guardOperation `json:"observation,omitempty"`
+	LastWriter       *guardOperation `json:"last_writer,omitempty"`
 }
 type guardPin struct {
 	ID           string            `json:"id"`
@@ -44,11 +46,13 @@ type guardPin struct {
 	TTL          time.Duration     `json:"ttl_ns"`
 }
 type guardJournal struct {
-	Version int                    `json:"version"`
-	Epoch   string                 `json:"epoch"`
-	Records map[string]guardRecord `json:"records"`
-	Pins    map[string]guardPin    `json:"pins"`
-	Writer  *guardOperation        `json:"writer,omitempty"`
+	Version   int                    `json:"version"`
+	Epoch     string                 `json:"epoch"`
+	Records   map[string]guardRecord `json:"records"`
+	Pins      map[string]guardPin    `json:"pins"`
+	Writer    *guardOperation        `json:"writer,omitempty"`
+	Batch     *guardBatch            `json:"batch,omitempty"`
+	LastBatch *guardBatchReceipt     `json:"last_batch,omitempty"`
 }
 type guardProof struct {
 	ExactOwner     bool `json:"exact_owner"`
@@ -72,16 +76,20 @@ type guardCoordinator struct {
 	zeroSince                                              map[string]time.Time
 	pinDeadline                                            map[string]time.Time
 	pinInFlight                                            map[string]bool
+	recoveredPins                                          map[string]bool
 	horizonMono, retentionMono                             map[string]time.Time
 	halted                                                 bool
 	withdrawBusy                                           bool
+	writerCursor                                           string
+	requestRefs                                            map[string]int
+	orphanCandidates                                       map[string]bool
 }
 
 func newGuardCoordinator(path string, capacity int, ttl, margin, uncertainty, quiet, retention time.Duration) (*guardCoordinator, error) {
 	if path == "" || capacity < 1 || ttl <= 0 || ttl > 300*time.Second || margin <= 0 || uncertainty < 0 || quiet <= 0 || retention <= 0 {
 		return nil, errors.New("invalid configuration")
 	}
-	c := &guardCoordinator{path: path, capacity: capacity, ttlMax: ttl, sendMargin: margin, clockUncertainty: uncertainty, quiet: quiet, retention: retention, zeroSince: map[string]time.Time{}, pinDeadline: map[string]time.Time{}, pinInFlight: map[string]bool{}, horizonMono: map[string]time.Time{}, retentionMono: map[string]time.Time{}}
+	c := &guardCoordinator{path: path, capacity: capacity, ttlMax: ttl, sendMargin: margin, clockUncertainty: uncertainty, quiet: quiet, retention: retention, zeroSince: map[string]time.Time{}, pinDeadline: map[string]time.Time{}, pinInFlight: map[string]bool{}, recoveredPins: map[string]bool{}, horizonMono: map[string]time.Time{}, retentionMono: map[string]time.Time{}}
 	b, e := os.ReadFile(path)
 	if os.IsNotExist(e) {
 		c.data = guardJournal{Version: 1, Epoch: token(), Records: map[string]guardRecord{}, Pins: map[string]guardPin{}}
@@ -99,6 +107,14 @@ func newGuardCoordinator(path string, capacity int, ttl, margin, uncertainty, qu
 	if c.data.Version != 1 || !guardID(c.data.Epoch) || c.data.Records == nil || c.data.Pins == nil {
 		return nil, errors.New("invalid journal")
 	}
+	// Journals from older releases did not record dispatch. After any restart,
+	// conservatively treat every unfinished create as potentially executed.
+	for p, r := range c.data.Records {
+		if r.Phase == "PREPARING" && r.Pending != nil && r.Pending.Action == "create_guard" {
+			r.CreateDispatched = true
+			c.data.Records[p] = r
+		}
+	}
 	occupied := 0
 	for k, r := range c.data.Records {
 		p, e := netip.ParsePrefix(k)
@@ -106,7 +122,7 @@ func newGuardCoordinator(path string, capacity int, ttl, margin, uncertainty, qu
 			return nil, errors.New("invalid record")
 		}
 		switch r.Phase {
-		case "PREPARING", "ACTIVE", "DRAINING", "BARRIER", "WITHDRAWN", "GUARD_REMOVED", "RETIRED":
+		case "PREPARING", "GUARDED", "ORPHAN_REMOVING", "ACTIVE", "DRAINING", "BARRIER", "WITHDRAWN", "GUARD_REMOVED", "RETIRED":
 		default:
 			return nil, errors.New("invalid phase")
 		}
@@ -125,12 +141,12 @@ func newGuardCoordinator(path string, capacity int, ttl, margin, uncertainty, qu
 		if (r.Phase == "ACTIVE" || r.Phase == "RETIRED") && r.Pending != nil {
 			return nil, errors.New("unexpected pending operation")
 		}
-		if r.Phase != "ACTIVE" && r.Phase != "RETIRED" {
+		if r.Phase != "ACTIVE" && r.Phase != "RETIRED" && !(r.Phase == "GUARDED" && r.Pending == nil) {
 			if r.Pending == nil {
 				return nil, errors.New("missing pending operation")
 			}
 			action := r.Pending.Action
-			valid := (r.Phase == "PREPARING" && action == "create_guard") || (r.Phase == "DRAINING" && action == "install_barrier") || (r.Phase == "BARRIER" && (action == "observe_conntrack" || action == "withdraw_bgp")) || (r.Phase == "WITHDRAWN" && action == "remove_guard") || (r.Phase == "GUARD_REMOVED" && action == "remove_barrier")
+			valid := (r.Phase == "PREPARING" && action == "create_guard") || (r.Phase == "GUARDED" && action == "confirm_bgp") || (r.Phase == "ORPHAN_REMOVING" && action == "remove_orphan_guard") || (r.Phase == "DRAINING" && action == "install_barrier") || (r.Phase == "BARRIER" && (action == "observe_conntrack" || action == "withdraw_bgp")) || (r.Phase == "WITHDRAWN" && action == "remove_guard") || (r.Phase == "GUARD_REMOVED" && action == "remove_barrier")
 			if !valid {
 				return nil, errors.New("operation phase mismatch")
 			}
@@ -139,6 +155,9 @@ func newGuardCoordinator(path string, capacity int, ttl, margin, uncertainty, qu
 	if occupied > capacity {
 		return nil, errors.New("journal exceeds capacity")
 	}
+	if err := validateGuardBatchJournal(c.data); err != nil {
+		return nil, err
+	}
 	if w := c.data.Writer; w != nil {
 		r, ok := c.data.Records[w.Prefix]
 		if !ok || (r.Pending == nil || *r.Pending != *w) && (r.Observation == nil || *r.Observation != *w) {
@@ -146,6 +165,7 @@ func newGuardCoordinator(path string, capacity int, ttl, margin, uncertainty, qu
 		}
 	}
 	for id, p := range c.data.Pins {
+		c.recoveredPins[id] = true
 		if id != p.ID || !guardID(id) || len(p.Prefixes) == 0 {
 			return nil, errors.New("invalid pin")
 		}
@@ -190,7 +210,11 @@ func (c *guardCoordinator) persist(j guardJournal) error {
 		_, e = f.Write(b)
 	}
 	if e == nil {
+		started := time.Now()
 		e = f.Sync()
+		if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+			log.Printf("guard journal slow file-sync=%s", elapsed)
+		}
 	}
 	if x := f.Close(); e == nil {
 		e = x
@@ -205,7 +229,11 @@ func (c *guardCoordinator) persist(j guardJournal) error {
 	if e != nil {
 		return e
 	}
+	started := time.Now()
 	e = d.Sync()
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		log.Printf("guard journal slow directory-sync=%s", elapsed)
+	}
 	if x := d.Close(); e == nil {
 		e = x
 	}
@@ -234,7 +262,7 @@ func (c *guardCoordinator) change(fn func(*guardJournal) error) error {
 	return nil
 }
 func (c *guardCoordinator) ready(now time.Time) bool {
-	return !c.halted && !c.recoveryNeedsReconcile && !now.Before(c.recoveryUntil)
+	return !c.halted && !c.recoveryNeedsReconcile
 }
 func guardPrefixes(in []string) ([]string, error) {
 	if len(in) == 0 {
@@ -258,12 +286,31 @@ func guardPrefixes(in []string) ([]string, error) {
 func (c *guardCoordinator) prepare(in []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.prepareLocked(in)
+}
+func (c *guardCoordinator) prepareLocked(in []string) error {
 	if !c.ready(time.Now()) {
 		return errors.New("recovering")
 	}
 	ps, e := guardPrefixes(in)
 	if e != nil {
 		return e
+	}
+	// The common warm path changes no durable state. Avoid a journal rewrite
+	// and fsync while retaining the same validation and lock discipline.
+	allPresent := true
+	for _, p := range ps {
+		r, ok := c.data.Records[p]
+		if !ok || r.Phase == "RETIRED" {
+			allPresent = false
+			continue
+		}
+		if r.Phase != "ACTIVE" && r.Phase != "PREPARING" && r.Phase != "GUARDED" {
+			return errors.New("draining")
+		}
+	}
+	if allPresent {
+		return nil
 	}
 	return c.change(func(j *guardJournal) error {
 		n, occupied := 0, 0
@@ -276,7 +323,7 @@ func (c *guardCoordinator) prepare(in []string) error {
 			r, ok := j.Records[p]
 			if !ok || r.Phase == "RETIRED" {
 				n++
-			} else if r.Phase != "ACTIVE" && r.Phase != "PREPARING" {
+			} else if r.Phase != "ACTIVE" && r.Phase != "PREPARING" && r.Phase != "GUARDED" {
 				return errors.New("draining")
 			}
 		}
@@ -303,32 +350,116 @@ func (c *guardCoordinator) activateLocked(op guardOperation, proof guardProof) e
 	if !c.ready(now) {
 		return errors.New("recovering")
 	}
-	if r, ok := c.data.Records[op.Prefix]; ok && r.Phase == "ACTIVE" && r.LastOperation != nil && *r.LastOperation == op {
+	if r, ok := c.data.Records[op.Prefix]; ok && r.LastOperation != nil && *r.LastOperation == op {
 		return nil
 	}
 	err := c.change(func(j *guardJournal) error {
 		r, ok := j.Records[op.Prefix]
-		if !ok || r.Phase != "PREPARING" || r.Pending == nil || *r.Pending != op || op.Action != "create_guard" || !proof.ExactOwner || !proof.GuardPresent || !proof.BGPActive || proof.BarrierPresent {
+		if !ok || r.Pending == nil || *r.Pending != op || !proof.ExactOwner || !proof.GuardPresent || proof.BarrierPresent {
 			return errors.New("activation unverified")
 		}
-		r.Phase = "ACTIVE"
-		r.RetainUntil = now.Add(c.retention)
+		switch op.Action {
+		case "create_guard":
+			if r.Phase != "PREPARING" {
+				return errors.New("invalid guard phase")
+			}
+			r.Phase = "GUARDED"
+		case "confirm_bgp":
+			if r.Phase != "GUARDED" || !proof.BGPActive {
+				return errors.New("BGP activation unverified")
+			}
+			r.Phase = "ACTIVE"
+			r.RetainUntil = now.Add(c.retention)
+		default:
+			return errors.New("invalid activation action")
+		}
 		r.LastOperation = r.Pending
 		r.Pending = nil
 		if j.Writer != nil && *j.Writer == op {
 			r.LastWriter = j.Writer
 			j.Writer = nil
 		}
+		if op.Action == "create_guard" && c.orphanCandidates[op.Prefix] && c.requestRefs[op.Prefix] == 0 {
+			r.Phase = "ORPHAN_REMOVING"
+			c.op(j, &r, "remove_orphan_guard")
+		}
 		j.Records[op.Prefix] = r
 		return nil
 	})
-	if err == nil {
+	if err == nil && op.Action == "confirm_bgp" {
 		c.retentionMono[op.Prefix] = now.Add(c.retention)
 	}
 	return err
 }
 
-// The caller must keep every pin until DNS write finishes or is abandoned.
+// guardsReady does not claim BGP is reachable: it establishes only that each
+// exact generation has a durable router-side protective route.
+func (c *guardCoordinator) guardsReady(prefixes []string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ready(time.Now()) || len(prefixes) == 0 {
+		return false
+	}
+	for _, p := range prefixes {
+		r, ok := c.data.Records[p]
+		if !ok || (r.Phase != "GUARDED" && r.Phase != "ACTIVE") {
+			return false
+		}
+	}
+	return true
+}
+
+// requestBGPConfirmation is called only after local BGP publication succeeds.
+func (c *guardCoordinator) requestBGPConfirmation(prefixes []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ready(time.Now()) {
+		return errors.New("recovering")
+	}
+	allQueued := true
+	for _, p := range prefixes {
+		r, ok := c.data.Records[p]
+		if !ok {
+			return errors.New("guard missing")
+		}
+		if r.Phase == "ACTIVE" {
+			continue
+		}
+		if r.Phase != "GUARDED" {
+			return errors.New("guard not ready")
+		}
+		if r.Pending == nil {
+			allQueued = false
+		} else if r.Pending.Action != "confirm_bgp" {
+			return errors.New("unexpected pending operation")
+		}
+	}
+	if allQueued {
+		return nil
+	}
+	return c.change(func(j *guardJournal) error {
+		for _, p := range prefixes {
+			r, ok := j.Records[p]
+			if !ok {
+				return errors.New("guard missing")
+			}
+			if r.Phase == "ACTIVE" {
+				continue
+			}
+			if r.Phase != "GUARDED" {
+				return errors.New("guard not ready")
+			}
+			if r.Pending == nil {
+				c.op(j, &r, "confirm_bgp")
+				j.Records[p] = r
+			} else if r.Pending.Action != "confirm_bgp" {
+				return errors.New("unexpected pending operation")
+			}
+		}
+		return nil
+	})
+}
+
 func (c *guardCoordinator) reserve(in []string, ttl time.Duration) (guardPin, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -409,6 +540,11 @@ func (c *guardCoordinator) expireUnstartedPins() error {
 		return errors.New("recovering")
 	}
 	var expired []string
+	if !now.Before(c.recoveryUntil) {
+		for id := range c.recoveredPins {
+			expired = append(expired, id)
+		}
+	}
 	for id, deadline := range c.pinDeadline {
 		if !c.pinInFlight[id] && now.After(deadline) {
 			expired = append(expired, id)
@@ -427,6 +563,7 @@ func (c *guardCoordinator) expireUnstartedPins() error {
 	}
 	for _, id := range expired {
 		delete(c.pinDeadline, id)
+		delete(c.recoveredPins, id)
 	}
 	return nil
 }
@@ -438,6 +575,9 @@ func (c *guardCoordinator) finish(id string) error {
 	defer c.mu.Unlock()
 	if !c.ready(time.Now()) {
 		return errors.New("recovering")
+	}
+	if c.recoveredPins[id] {
+		return errors.New("recovered pin protected until grace expires")
 	}
 	err := c.change(func(j *guardJournal) error {
 		if _, ok := j.Pins[id]; !ok {
@@ -509,7 +649,7 @@ func (c *guardCoordinator) retire(prefix string, safety time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
-	if !c.ready(now) || safety < 0 || now.Before(c.horizonMono[prefix].Add(safety)) || now.Before(c.retentionMono[prefix]) {
+	if !c.ready(now) || now.Before(c.recoveryUntil) || safety < 0 || now.Before(c.horizonMono[prefix].Add(safety)) || now.Before(c.retentionMono[prefix]) {
 		return errors.New("not ready")
 	}
 	return c.change(func(j *guardJournal) error {
@@ -597,6 +737,12 @@ func (c *guardCoordinator) ackLocked(op guardOperation, result string, p guardPr
 	e := c.change(func(j *guardJournal) error {
 		r := j.Records[op.Prefix]
 		switch op.Action {
+		case "remove_orphan_guard":
+			if r.Phase != "ORPHAN_REMOVING" || !p.GuardAbsent || !p.BGPGone || p.BarrierPresent {
+				return errors.New("unverified orphan removal")
+			}
+			r.Phase = "RETIRED"
+			r.Pending = nil
 		case "install_barrier":
 			if r.Phase != "DRAINING" || !p.BarrierPresent || !p.GuardPresent || !p.BGPActive {
 				return errors.New("unverified barrier")
@@ -667,10 +813,11 @@ func (c *guardCoordinator) ackLocked(op guardOperation, result string, p guardPr
 // prove packet-path quiescence. In particular, a passing audit is NEVER an
 // authorization to unlock recovery or execute the pending operation.
 type guardRecoveryObservation struct {
-	Prefix, Generation, PendingID string
-	GuardPresent, GuardOwned      bool
-	BGPPresent, BGPVerified       bool
-	BarrierPresent, BarrierOwned  bool
+	Prefix, Generation, PendingID      string
+	GuardPresent, GuardOwned           bool
+	BGPPresent, BGPVerified            bool
+	BarrierPresent, BarrierOwned       bool
+	ConnectionsComplete, NoConnections bool
 }
 type guardRecoverySnapshot struct {
 	Epoch            string
@@ -722,6 +869,14 @@ func (c *guardCoordinator) auditRecoveryClaims(s guardRecoverySnapshot) error {
 			// Creation may have stopped before the guard, or after guard+BGP setup.
 			if o.BarrierPresent || (o.BGPPresent && !o.GuardPresent) {
 				return errors.New("unsafe preparation state")
+			}
+		case "GUARDED":
+			if !o.GuardPresent || o.BarrierPresent {
+				return errors.New("guarded state mismatch")
+			}
+		case "ORPHAN_REMOVING":
+			if o.BGPPresent || o.BarrierPresent {
+				return errors.New("unsafe orphan state")
 			}
 		case "ACTIVE":
 			if !o.GuardPresent || !o.BGPPresent || o.BarrierPresent {

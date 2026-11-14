@@ -29,10 +29,22 @@ prepare() {
   fi
   send_patch="$ROOT/patches/mosdns-send-hooks.patch"
   [ -s "$send_patch" ] || { echo "missing send hooks patch" >&2; exit 1; }
-  if git -C "$UPSTREAM_DIR" apply --check "$send_patch" 2>/dev/null; then
-    git -C "$UPSTREAM_DIR" apply "$send_patch"
-  elif ! git -C "$UPSTREAM_DIR" apply --reverse --check "$send_patch" 2>/dev/null; then
+  if git -C "$UPSTREAM_DIR" apply --unidiff-zero --reverse --check "$send_patch" 2>/dev/null; then
+    : # Already applied exactly; repeated prepare is safe.
+  elif git -C "$UPSTREAM_DIR" diff --quiet HEAD -- pkg/server/tcp.go pkg/server/udp.go &&
+       [ ! -e "$UPSTREAM_DIR/pkg/server/send_hooks.go" ] &&
+       [ ! -e "$UPSTREAM_DIR/pkg/server/send_hooks_test.go" ] &&
+       git -C "$UPSTREAM_DIR" apply --unidiff-zero --check "$send_patch" 2>/dev/null; then
+    git -C "$UPSTREAM_DIR" apply --unidiff-zero "$send_patch"
+  else
     echo "send hooks patch does not match pinned upstream" >&2; exit 1
+  fi
+  entry_patch="$ROOT/patches/mosdns-entry-timeout.patch"
+  [ -s "$entry_patch" ] || { echo "missing entry timeout patch" >&2; exit 1; }
+  if git -C "$UPSTREAM_DIR" apply --check "$entry_patch" 2>/dev/null; then
+    git -C "$UPSTREAM_DIR" apply "$entry_patch"
+  elif ! git -C "$UPSTREAM_DIR" apply --reverse --check "$entry_patch" 2>/dev/null; then
+    echo "entry timeout patch does not match pinned upstream" >&2; exit 1
   fi
   cp "$ROOT/patches/fallback_route_source_test.go" "$UPSTREAM_DIR/plugin/executable/sequence/fallback/route_source_test.go"
   rm -rf "$UPSTREAM_DIR/plugin/executable/ros_bgp"
