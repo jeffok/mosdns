@@ -1,9 +1,10 @@
 log:
-  level: error
-  file: /etc/mosdns/mosdns.log
+  level: __LOG_LEVEL__
+  file: __LOG_FILE__
 api:
   http: 127.0.0.1:9091
 plugins:
+__ROS_ADDRLIST_PLUGIN__
 - tag: forward_cn
   type: forward
   args:
@@ -80,6 +81,7 @@ __UPSTREAMS_AI__
 - tag: has_resp_sequence
   type: sequence
   args:
+__ROS_ADDRLIST_HASRESP__
   - matches: has_resp
     exec: accept
 - tag: query_custom_hosts

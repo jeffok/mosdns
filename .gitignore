@@ -17,3 +17,4 @@ certs/
 # 开发环境
 .venv/
 __pycache__/
+.cache/

@@ -1,0 +1,12 @@
+.git
+.github
+.gitea
+bgp-agent
+tests
+tools/*.py
+*.md
+!README.md
+.env
+certs
+.cache/iso-test-*
+.dockerignore

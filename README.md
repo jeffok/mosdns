@@ -50,9 +50,10 @@ ROS 容器中运行 MosDNS，需要将虚拟网卡加入网桥并配置环境变
 | **DOH_ENABLED** | 0 | 设为 1 开启 DoH (DoH 证书需放 certs/ 目录下) |
 | **DOH_CERT** | /etc/mosdns/certs/fullchain.pem | DoH 容器内证书路径 |
 | **DOH_KEY** | /etc/mosdns/certs/privkey.pem | DoH 容器内私钥路径 |
-| **ROS_HOST** | 空 | **ROS AI 同步**：路由器 REST API IP，需开启 `www` 服务 |
-| **ROS_USER** | admin | ROS 管理员用户名 |
-| **ROS_PASS** | 空 | ROS 管理员密码 |
+| **ENABLE_ROS_ADDRLIST** | 0 | 设为 1 启用 ros_addrlist（RouterOS 容器专用，把海外解析 IP 写回 ROS 地址列表） |
+| **ROS_API_ADDR** | 192.168.88.254:8728 | RouterOS API 地址（`ip service api`） |
+| **ROS_API_USER** | 空 | ROS 专用账号（建议组仅 `api,read,write,test` + `address` 限容器 IP） |
+| **ROS_API_PASS** | 空 | ROS 专用账号密码 |
 | **AI_LIST_URL** | GitHub rules/ai-list.txt | AI 域名列表远端地址（支持自定义 API），默认每 2 分钟检查更新 |
 | **CONTAINER_DNS** | 8.8.8.8 | 容器内部下载规则时使用的 DNS。默认使用 8.8.8.8 以保证 GitHub 可访问 |
 | **RULE_FILE_MAX_AGE** | 82800 (23小时) | 规则文件保留秒数，超过此时间则触发更新，`0` 为每次强制下载 |
@@ -60,7 +61,7 @@ ROS 容器中运行 MosDNS，需要将虚拟网卡加入网桥并配置环境变
 
 ---
 
-## AI 分流配置说明 (含 ROS 防火墙联动)
+## AI 分流配置说明
 
 本项目内置了 AI 专用分流逻辑，自动识别 `chatgpt.com`, `gemini.google.com`, `claude.ai` 等域名并转发至 `DNS_AI` 对应的服务端。
 
@@ -68,15 +69,20 @@ ROS 容器中运行 MosDNS，需要将虚拟网卡加入网桥并配置环境变
 直接启动容器，确保你的 `DNS_AI`（或 `DNS_GLOBAL`）上游指向你可用代理服务器的网关 IP（如新加坡节点 IP）即可。
 
 ### 2. RouterOS (ROS) 防火墙联动
-在 ROS 环境中，通常利用防火墙地址列表（Address List）标记流量并强制走策略路由。MosDNS 容器内置了自动同步脚本。
+在 ROS 环境中，利用防火墙地址列表（Address List）标记流量并强制走策略路由。
 
-**实现步骤：**
-1. **开启 REST API**：确保路由器的 `www` 服务已开启并可从 LAN 访问。
-2. **配置同步参数**：在 `.env` 中设置 `ROS_HOST=192.168.88.1` 和 `ROS_PASS=password`。
-3. **自动写入**：容器每 2 分钟运行一次，将解析到的最新 AI IP 写入 ROS 的 `ai-sgp` 地址列表中。
-4. **配置策略**：在 ROS 中抓取目标为 `address-list=ai-sgp` 的流量，强制指定路由出口。
+**ros_addrlist 插件**会把**海外域名**解析出的真实 IPv4 通过 **RouterOS API（8728）** 实时写入 `gfw-proxy` 地址列表，条目带 `timeout` 租约自动回收。
 
-> **优势**：无论 AI 域名对应的 IP 如何频繁变更，你的路由器都能实时跟踪并正确转发，无需人工干预。
+**部署步骤：**
+1. **ROS 创建专用账号**：组仅含 `api,read,write,test`，并限制 `address=192.168.88.222/32`（只允许容器 IP 调用 API）。
+   ```routeros
+   /user/group/add name=mosdns-sync policy=api,read,write,test
+   /user/add name=mosdns group=mosdns-sync password=<24位随机密码> address=192.168.88.222/32
+   ```
+2. **环境变量**：设 `ENABLE_ROS_ADDRLIST=1` + `ROS_API_USER`/`ROS_API_PASS`（其余参数默认值已内置，按需覆盖 `ROS_API_ADDR`/`ROS_ADDRLIST_NAME`/`ROS_ADDRLIST_TIMEOUT`/`ROS_ADDRLIST_DEDUP` 等）。
+3. **策略路由**：ROS mangle 标记 `dst-address-list=gfw-proxy` 的流量，走代理出口（如 OVPN）。
+
+> **注意**：mosdns 的 `has_resp_sequence` 已挂上该插件——凡产生应答的海外域名，解析后立刻回写 IP，CN 段与保留段自动过滤，同 IP 5 分钟内不重复写入。
 
 ---
 

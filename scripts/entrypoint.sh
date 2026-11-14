@@ -45,20 +45,64 @@ count_dns() {
 TEMPLATE=/opt/mosdns/config.template.yaml
 if [ -f "$TEMPLATE" ]; then
   ECS_PRESET="${ECS_PRESET:-}"
+  # 日志默认 info + stderr（RouterOS 容器可直接在 /log 看到）；
+  # 如需写文件可设 LOG_FILE=/etc/mosdns/mosdns.log。
+  LOG_LEVEL="${LOG_LEVEL:-info}"
+  LOG_FILE="${LOG_FILE-}"
   sed -e "s|__CONCURRENT_CN__|$(count_dns "$DNS_CN")|" \
       -e "s|__CONCURRENT_GLOBAL__|$(count_dns "$DNS_GLOBAL")|" \
       -e "s|__CONCURRENT_AI__|$(count_dns "$DNS_AI")|" \
       -e "s|__ECS_PRESET__|$ECS_PRESET|" \
+      -e "s|__LOG_LEVEL__|$LOG_LEVEL|" \
+      -e "s|__LOG_FILE__|$LOG_FILE|" \
       "$TEMPLATE" > /tmp/config.tmp
 
   CN_YAML=$(dns_to_yaml "$DNS_CN")
   GL_YAML=$(dns_to_yaml "$DNS_GLOBAL")
   AI_YAML=$(dns_to_yaml "$DNS_AI")
 
+  # ---- ros_addrlist 插件（把海外应答 IPv4 写入 ROS address-list）----
+  # ENABLE_ROS_ADDRLIST=1 且凭据齐备时启用；否则渲染为空。
+  ROS_PLUGIN_YAML=""
+  ROS_HASRESP_YAML=""
+  case "${ENABLE_ROS_ADDRLIST:-0}" in 1|true|yes)
+    if [ -z "$ROS_API_USER" ] || [ -z "$ROS_API_PASS" ]; then
+      log "WARN ENABLE_ROS_ADDRLIST=1 but ROS_API_USER/ROS_API_PASS missing, plugin disabled"
+    else
+      ROS_API_ADDR="${ROS_API_ADDR:-192.168.88.254:8728}"
+      ROS_PLUGIN_YAML=$(cat <<PYEOF
+- tag: ros_addrlist
+  type: ros_addrlist
+  args:
+    address: ${ROS_API_ADDR}
+    username: ${ROS_API_USER}
+    password: ${ROS_API_PASS}
+    list_name: ${ROS_ADDRLIST_NAME:-gfw-proxy}
+    timeout: ${ROS_ADDRLIST_TIMEOUT:-24h}
+    comment: ${ROS_ADDRLIST_COMMENT:-mosdns-learned}
+    queue_size: ${ROS_ADDRLIST_QUEUE:-2048}
+    dedup_ttl: ${ROS_ADDRLIST_DEDUP:-5m}
+    cn_ip_file: ${ROS_ADDRLIST_CN_FILE:-/etc/mosdns/rules/china_ip_list.txt}
+    workers: ${ROS_ADDRLIST_WORKERS:-1}
+    dial_timeout: ${ROS_API_DIAL_TIMEOUT:-5s}
+    write_timeout: ${ROS_API_WRITE_TIMEOUT:-5s}
+    reconn_delay: ${ROS_API_RECONN_DELAY:-2s}
+PYEOF
+)
+      ROS_HASRESP_YAML="  - matches: has_resp
+    exec: \$ros_addrlist
+"
+      log "ros_addrlist enabled -> ${ROS_API_ADDR} list=${ROS_ADDRLIST_NAME:-gfw-proxy}"
+    fi
+  ;; esac
+
   awk -v cn="$CN_YAML" -v gl="$GL_YAML" -v ai="$AI_YAML" \
+      -v ros_plugin="$ROS_PLUGIN_YAML" -v ros_hasresp="$ROS_HASRESP_YAML" \
     '/__UPSTREAMS_CN__/{print cn;next}
      /__UPSTREAMS_GLOBAL__/{print gl;next}
      /__UPSTREAMS_AI__/{print ai;next}
+     /__ROS_ADDRLIST_PLUGIN__/ { if (ros_plugin != "") print ros_plugin; next }
+     /__ROS_ADDRLIST_HASRESP__/ { if (ros_hasresp != "") printf "%s", ros_hasresp; next }
      {print}' /tmp/config.tmp > /etc/mosdns/config.yaml
   rm -f /tmp/config.tmp
 
