@@ -78,11 +78,28 @@ func bgpFail(q *query_context.Context) {
 	m.SetRcode(q.Q(), dns.RcodeServerFailure)
 	q.SetResponse(m)
 }
+
+// capResponseTTL applies to all selected responses, including CN and hosts.
+// EDNS OPT TTL carries protocol flags rather than a DNS record lifetime.
+func capResponseTTL(r *dns.Msg, max uint32) {
+	if r == nil {
+		return
+	}
+	for _, group := range [][]dns.RR{r.Answer, r.Ns, r.Extra} {
+		for _, rr := range group {
+			if rr.Header().Rrtype != dns.TypeOPT && rr.Header().Ttl > max {
+				rr.Header().Ttl = max
+			}
+		}
+	}
+}
+
 func (p *bgpConfirmPlugin) Exec(ctx context.Context, q *query_context.Context) error {
-	if q.R() == nil || q.R().Rcode != dns.RcodeSuccess {
+	r := q.R()
+	capResponseTTL(r, 300)
+	if r == nil || r.Rcode != dns.RcodeSuccess {
 		return nil
 	}
-	r := q.R()
 	source, ok := q.GetValue(query_context.RouteSourceKey)
 	if _, direct := source.(bgpDirectProvenance); ok && direct {
 		return nil

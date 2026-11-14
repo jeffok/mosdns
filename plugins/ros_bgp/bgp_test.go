@@ -141,3 +141,41 @@ func TestBGPConfirmConfiguredBudget(t *testing.T) {
 		t.Fatal("unbounded confirm budget accepted")
 	}
 }
+
+func TestBGPFinalAnswerCapsAllTTLWithoutRaisingShortOrChangingEDNS(t *testing.T) {
+	var b netipx.IPSetBuilder
+	cn, _ := b.IPSet()
+	p := &bgpConfirmPlugin{cn: cn}
+	for _, tc := range []struct {
+		name      string
+		ttl, want uint32
+	}{
+		{"domestic", 315, 300}, {"static_host", 604800, 300}, {"short_upstream", 42, 42}, {"zero_upstream", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := bgpQuery("192.168.1.1", tc.ttl, "")
+			q.StoreValue(query_context.RouteSourceKey, bgpDirectProvenance{})
+			if err := p.Exec(context.Background(), q); err != nil {
+				t.Fatal(err)
+			}
+			if got := q.R().Answer[0].Header().Ttl; got != tc.want {
+				t.Fatalf("got TTL %d want %d", got, tc.want)
+			}
+		})
+	}
+	qmsg := new(dns.Msg)
+	qmsg.SetQuestion("nonexistent.example.", dns.TypeA)
+	qmsg.SetEdns0(1232, true)
+	q := query_context.NewContext(qmsg)
+	beforeOPT := q.RespOpt().Hdr.Ttl
+	r := new(dns.Msg)
+	r.SetRcode(q.Q(), dns.RcodeNameError)
+	r.Ns = []dns.RR{&dns.SOA{Hdr: dns.RR_Header{Name: "example.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900}, Ns: "ns.example.", Mbox: "host.example.", Minttl: 120}}
+	q.SetResponse(r)
+	if err := p.Exec(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	if q.R().Ns[0].Header().Ttl != 300 || q.RespOpt().Hdr.Ttl != beforeOPT {
+		t.Fatal("negative response TTL or EDNS flags changed incorrectly")
+	}
+}
