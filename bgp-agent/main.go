@@ -126,6 +126,7 @@ type app struct {
 	routeGeneration                            uint64
 	up                                         bool
 	pub                                        publication
+	guard                                      *guardCoordinator // prototype only; startup still rejects guard mode
 	cn                                         []netip.Prefix
 	flight                                     singleflight.Group
 	stop                                       chan struct{}
@@ -400,11 +401,14 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 		ready := a.up
 		for _, k := range keys {
 			r := a.routes[k]
-			if r == nil || r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond {
+			if r == nil || (a.guard == nil && (r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond)) {
 				ready = false
 			}
 		}
 		a.mu.Unlock()
+		if a.guard != nil && !a.guard.allActive(keys) {
+			ready = false
+		}
 		if ready && advertised {
 			// Every positive response must be recoverable after an ungraceful
 			// process exit. A previous persisted lease can cover repeated hits.
@@ -426,11 +430,14 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 			ready = a.up
 			for _, k := range keys {
 				r := a.routes[k]
-				if r == nil || r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond || r.generation != a.durableGeneration[k] || r.AnswerUntil.After(a.durableUntil[k]) {
+				if r == nil || (a.guard == nil && (r.AckAt.IsZero() || time.Since(r.AckAt) > time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond)) || r.generation != a.durableGeneration[k] || r.AnswerUntil.After(a.durableUntil[k]) {
 					ready = false
 				}
 			}
 			a.mu.Unlock()
+			if a.guard != nil && !a.guard.allActive(keys) {
+				ready = false
+			}
 		}
 		if ready {
 			if err := ctx.Err(); err != nil {
@@ -586,6 +593,11 @@ func (a *app) save() (err error) {
 	return nil
 }
 func (a *app) gc(now time.Time) {
+	// Until protected withdrawal is connected, legacy GC must never withdraw a
+	// route governed by guard pins. Capacity exhaustion is safer than leakage.
+	if a.guard != nil {
+		return
+	}
 	a.mu.Lock()
 	var candidates []string
 	for k, r := range a.routes {
@@ -645,6 +657,34 @@ func (a *app) gc(now time.Time) {
 		<-a.work
 		log.Printf("withdraw prefix=%s", k)
 	}
+}
+
+// dispatchGuardWithdrawal is deliberately not scheduled by run yet. The
+// protected retirement loop and restart reconciliation must be integrated
+// before this method can run in production.
+func (a *app) dispatchGuardWithdrawal() error {
+	if a.guard == nil {
+		return errors.New("guard unavailable")
+	}
+	return a.guard.dispatchWithdrawal(func(op guardOperation) error {
+		a.workOnce.Do(func() { a.work = make(chan struct{}, 1) })
+		a.work <- struct{}{}
+		defer func() { <-a.work }()
+		a.mu.Lock()
+		r := a.routes[op.Prefix]
+		a.mu.Unlock()
+		if r == nil {
+			return errors.New("withdrawal route unavailable")
+		}
+		if err := a.pub.Delete(r.UUID); err != nil {
+			return err
+		}
+		a.mu.Lock()
+		delete(a.routes, op.Prefix)
+		a.dirty = true
+		a.mu.Unlock()
+		return a.save()
+	})
 }
 func clamp(m *dns.Msg, max uint32) uint32 {
 	ttl := max
@@ -855,6 +895,13 @@ func writeDNSResponse(w dns.ResponseWriter, q, response *dns.Msg) error {
 }
 
 func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
+	// The standalone DNS server has no post-socket-write pin hook yet.
+	if a.guard != nil {
+		m := new(dns.Msg)
+		m.SetRcode(q, dns.RcodeServerFailure)
+		_ = writeDNSResponse(w, q, m)
+		return
+	}
 	a.requests.Add(1)
 	a.dnsOnce.Do(func() { a.slots = make(chan struct{}, 32) })
 	select {
@@ -891,6 +938,17 @@ func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 }
 func (a *app) httpHandler() http.Handler {
 	mux := http.NewServeMux()
+	if a.guard != nil {
+		client, _ := netip.ParseAddr(a.cfg.ConfirmClientIP)
+		peer, _ := netip.ParseAddr(a.cfg.PeerIP)
+		pin := guardPinHTTP(a.guard, client)
+		mux.Handle("/guardpin/may-send", pin)
+		mux.Handle("/guardpin/finish-sent", pin)
+		mux.Handle("/guardpin/abandon", pin)
+		writer := guardWriterHTTP(a.guard, peer)
+		mux.Handle("/guardwriter/next", writer)
+		mux.Handle("/guardwriter/ack", writer)
+	}
 	// Reserved fail-closed interfaces only; no state machine operation is
 	// exposed before writer authentication, DNS pinning and recovery exist.
 	guardUnavailable := func(method string) http.HandlerFunc {
@@ -913,8 +971,10 @@ func (a *app) httpHandler() http.Handler {
 	}
 	mux.HandleFunc("/guardgc/next", guardUnavailable(http.MethodGet))
 	mux.HandleFunc("/guardgc/ack", guardUnavailable(http.MethodPost))
-	mux.HandleFunc("/guardwriter/next", guardUnavailable(http.MethodGet))
-	mux.HandleFunc("/guardwriter/ack", guardUnavailable(http.MethodPost))
+	if a.guard == nil {
+		mux.HandleFunc("/guardwriter/next", guardUnavailable(http.MethodGet))
+		mux.HandleFunc("/guardwriter/ack", guardUnavailable(http.MethodPost))
+	}
 	mux.HandleFunc("/confirm", func(w http.ResponseWriter, r *http.Request) {
 		if a.cfg.ConfirmClientIP == "" {
 			http.NotFound(w, r)
@@ -982,9 +1042,31 @@ func (a *app) httpHandler() http.Handler {
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 			return
 		}
+		var prefixes []string
+		if a.guard != nil {
+			for _, ip := range ips {
+				prefixes = append(prefixes, netip.PrefixFrom(ip, 32).String())
+			}
+			if err := a.guard.prepare(prefixes); err != nil {
+				http.Error(w, "guard preparation failed", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		if err := a.ensure(r.Context(), strings.ToLower(req.Domain), ips, *req.TTL, true); err != nil {
 			log.Printf("confirmation blocked domain=%s error=%v", req.Domain, err)
 			http.Error(w, "route confirmation failed", http.StatusServiceUnavailable)
+			return
+		}
+		if a.guard != nil {
+			pin, err := a.guard.reserve(prefixes, time.Duration(*req.TTL)*time.Second)
+			if err != nil {
+				http.Error(w, "guard pin failed", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(struct {
+				ID string `json:"pin_id"`
+			}{pin.ID})
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

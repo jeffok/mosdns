@@ -7,14 +7,19 @@ package ros_bgp
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
+	"github.com/IrineSistiana/mosdns/v5/pkg/server"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
 	"github.com/miekg/dns"
 	"go4.org/netipx"
@@ -43,9 +48,10 @@ func (*bgpDirectTagPlugin) Exec(_ context.Context, q *query_context.Context) err
 }
 
 type bgpConfirmPlugin struct {
-	endpoint string
-	cn       *netipx.IPSet
-	client   *http.Client
+	endpoint    string
+	cn          *netipx.IPSet
+	client      *http.Client
+	guardWriter bool
 }
 
 func newBGPConfirm(a *Args) (*bgpConfirmPlugin, error) {
@@ -61,7 +67,7 @@ func newBGPConfirm(a *Args) (*bgpConfirmPlugin, error) {
 	if err != nil || budget <= 0 || budget > 30*time.Second {
 		return nil, fmt.Errorf("ros_bgp: invalid BGP confirmation budget")
 	}
-	return &bgpConfirmPlugin{endpoint: a.Endpoint, cn: cn, client: &http.Client{Timeout: budget, Transport: &http.Transport{Proxy: nil}}}, nil
+	return &bgpConfirmPlugin{endpoint: a.Endpoint, cn: cn, guardWriter: a.GuardWriter, client: &http.Client{Timeout: budget, Transport: &http.Transport{Proxy: nil}}}, nil
 }
 
 // These special-use prefixes must never be returned as a usable global route.
@@ -94,6 +100,37 @@ func capResponseTTL(r *dns.Msg, max uint32) {
 	}
 }
 
+// responseIPv4 visits address records and SVCB/HTTPS address hints in every section.
+func responseIPv4(r *dns.Msg, visit func(net.IP, uint32) bool) bool {
+	for _, group := range [][]dns.RR{r.Answer, r.Ns, r.Extra} {
+		for _, rr := range group {
+			var svc *dns.SVCB
+			switch x := rr.(type) {
+			case *dns.A:
+				if !visit(x.A, x.Hdr.Ttl) {
+					return false
+				}
+			case *dns.SVCB:
+				svc = x
+			case *dns.HTTPS:
+				svc = &x.SVCB
+			}
+			if svc != nil {
+				for _, v := range svc.Value {
+					if h, ok := v.(*dns.SVCBIPv4Hint); ok {
+						for _, ip := range h.Hint {
+							if !visit(ip, svc.Hdr.Ttl) {
+								return false
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
 func (p *bgpConfirmPlugin) Exec(ctx context.Context, q *query_context.Context) error {
 	r := q.R()
 	capResponseTTL(r, 300)
@@ -106,62 +143,68 @@ func (p *bgpConfirmPlugin) Exec(ctx context.Context, q *query_context.Context) e
 	}
 	provenance, global := source.(bgpProvenance)
 	if !ok || !global || provenance.at.IsZero() {
-		// A selected A answer without an explicit source can never bypass routing.
-		for _, rr := range r.Answer {
-			if _, isA := rr.(*dns.A); isA {
-				bgpFail(q)
-				break
-			}
-		}
+		// Missing provenance cannot authorize addresses from any DNS section or hint.
+		responseIPv4(r, func(_ net.IP, _ uint32) bool { bgpFail(q); return false })
 		return nil
 	}
 	ips := []string{}
 	seen := map[netip.Addr]bool{}
-	ttl := uint32(300)
-	hasAnswer := false
+	// An answer can have a short-lived SRV/MX/HTTPS record and longer-lived
+	// address records in its additional section. The route must outlive the
+	// longest eligible A TTL, not just the shortest answer TTL.
+	answerTTL := uint32(300)
 	for _, rr := range r.Answer {
-		hasAnswer = true
-		if rr.Header().Ttl < ttl {
-			ttl = rr.Header().Ttl
+		if rr.Header().Ttl < answerTTL {
+			answerTTL = rr.Header().Ttl
 		}
-		a, ok := rr.(*dns.A)
+	}
+	var routeTTL uint32
+	valid := responseIPv4(r, func(raw net.IP, ttl uint32) bool {
+		ip, ok := netip.AddrFromSlice(raw.To4())
 		if !ok {
-			continue
-		}
-		ip, ok := netip.AddrFromSlice(a.A.To4())
-		if !ok {
-			bgpFail(q)
-			return nil
+			return false
 		}
 		ip = ip.Unmap()
 		for _, invalid := range bgpInvalid {
 			if invalid.Contains(ip) {
-				bgpFail(q)
-				return nil
+				return false
 			}
 		}
 		if ip.IsPrivate() || cgnat.Contains(ip) || p.cn.Contains(ip) {
-			continue
+			return true
 		}
 		if !ip.IsGlobalUnicast() {
-			bgpFail(q)
-			return nil
+			return false
+		}
+		if ttl > routeTTL {
+			routeTTL = ttl
 		}
 		if !seen[ip] {
 			seen[ip] = true
 			ips = append(ips, ip.String())
 		}
-	}
-	if !hasAnswer || len(ips) == 0 {
-		return nil
-	}
-	before := uint32(time.Since(provenance.at) / time.Second)
-	if ttl > 0 && before >= ttl {
+		return true
+	})
+	if !valid {
 		bgpFail(q)
 		return nil
 	}
-	requestTTL := ttl
-	if before > 0 && ttl > 0 {
+	if len(ips) == 0 {
+		return nil
+	}
+	if p.guardWriter && !server.HasSendHooks(ctx) {
+		bgpFail(q)
+		return nil
+	}
+	before := uint32(time.Since(provenance.at) / time.Second)
+	if answerTTL > 0 && before >= answerTTL {
+		bgpFail(q)
+		return nil
+	}
+	requestTTL := routeTTL
+	if before >= requestTTL {
+		requestTTL = 0
+	} else {
 		requestTTL -= before
 	}
 	payload, err := json.Marshal(struct {
@@ -184,13 +227,49 @@ func (p *bgpConfirmPlugin) Exec(ctx context.Context, q *query_context.Context) e
 		bgpFail(q)
 		return nil
 	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusNoContent {
-		bgpFail(q)
-		return nil
+	if p.guardWriter {
+		var pin struct {
+			PinID string `json:"pin_id"`
+		}
+		err = json.NewDecoder(io.LimitReader(res.Body, 1024)).Decode(&pin)
+		res.Body.Close()
+		raw, hexErr := hex.DecodeString(pin.PinID)
+		if res.StatusCode != http.StatusOK || err != nil || hexErr != nil || len(raw) != 12 || pin.PinID != strings.ToLower(pin.PinID) || ctx.Err() != nil {
+			bgpFail(q)
+			return nil
+		}
+		base := strings.TrimSuffix(p.endpoint, "/confirm")
+		callback := func(path string) bool {
+			body, _ := json.Marshal(struct {
+				PinID string `json:"pin_id"`
+			}{pin.PinID})
+			callCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(callCtx, http.MethodPost, base+path, bytes.NewReader(body))
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := p.client.Do(req)
+			if err != nil {
+				return false
+			}
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusNoContent
+		}
+		if !server.RegisterSendHooks(ctx, func() bool { return callback("/guardpin/may-send") }, func() { callback("/guardpin/finish-sent") }) {
+			bgpFail(q)
+			return nil
+		}
+	} else {
+		res.Body.Close()
+		if res.StatusCode != http.StatusNoContent || ctx.Err() != nil {
+			bgpFail(q)
+			return nil
+		}
 	}
 	age := uint32(time.Since(provenance.at) / time.Second)
-	if ttl > 0 && age >= ttl {
+	if answerTTL > 0 && age >= answerTTL {
 		bgpFail(q)
 		return nil
 	}

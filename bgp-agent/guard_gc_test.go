@@ -2,10 +2,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,6 +126,82 @@ func TestGuardRestartNeverReusesAnswerPinForSending(t *testing.T) {
 	restored.recoveryNeedsReconcile = false
 	if err := restored.finish(pin.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGuardSendCompletionExtendsTTLAndPersistsBeforeUnpin(t *testing.T) {
+	c := guardTest(t, 1)
+	prefix := "1.1.1.1/32"
+	if err := c.prepare([]string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	guardActivate(t, c, prefix)
+	pin, err := c.reserve([]string{prefix}, 80*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.beginSend(pin.ID) || c.beginSend(pin.ID) {
+		t.Fatal("pin did not enforce one in-flight write")
+	}
+	// Simulate a write that started in time but has not returned by its send
+	// admission deadline. While it remains in flight, retirement is forbidden.
+	c.pinDeadline[pin.ID] = time.Now().Add(-time.Second)
+	c.horizonMono[prefix] = time.Now().Add(-time.Second)
+	c.retentionMono[prefix] = time.Now().Add(-time.Second)
+	if c.maySend(pin.ID) {
+		t.Fatal("expired pin permitted a new send")
+	}
+	if err := c.retire(prefix, 0); err == nil {
+		t.Fatal("in-flight answer was retired")
+	}
+	start := time.Now()
+	if err := c.finishSent(pin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c.horizonMono[prefix].Before(start.Add(pin.TTL)) {
+		t.Fatal("completion did not extend the monotonic TTL horizon")
+	}
+	if err := c.retire(prefix, 0); err == nil {
+		t.Fatal("retired before the completed answer's TTL")
+	}
+	data, err := os.ReadFile(c.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved guardJournal
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved.Pins[pin.ID]; ok || saved.Records[prefix].AnswerUntil.Before(start.Add(pin.TTL)) {
+		t.Fatal("durable unpin and completion horizon were not committed together")
+	}
+}
+
+func TestGuardExpiresOnlyUnstartedPins(t *testing.T) {
+	c := guardTest(t, 1)
+	p := "1.1.1.1/32"
+	if err := c.prepare([]string{p}); err != nil {
+		t.Fatal(err)
+	}
+	guardActivate(t, c, p)
+	unused, err := c.reserve([]string{p}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := c.reserve([]string{p}, 0)
+	if err != nil || !c.beginSend(started.ID) {
+		t.Fatal("begin failed", err)
+	}
+	c.pinDeadline[unused.ID] = time.Now().Add(-time.Second)
+	c.pinDeadline[started.ID] = time.Now().Add(-time.Second)
+	if err := c.expireUnstartedPins(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.data.Pins[unused.ID]; ok {
+		t.Fatal("unused expired pin was retained")
+	}
+	if _, ok := c.data.Pins[started.ID]; !ok {
+		t.Fatal("in-flight write lost its pin")
 	}
 }
 func TestGuardFullLifecycleAndStaleOps(t *testing.T) {
@@ -442,5 +521,19 @@ func TestGuardGCUnavailableDefaultAndMistakenEnable(t *testing.T) {
 	cfg.GuardGCEnabled = true
 	if _, err := newApp(cfg, pub); err == nil {
 		t.Fatal("guard GC started before integration")
+	}
+	// The full entrypoint must reject before starting BGP or even parsing its
+	// addresses; malformed addresses prove the enable check runs first.
+	cfg.LocalIP = "invalid"
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(path); err == nil || !strings.Contains(err.Error(), "guard_gc_enabled is unavailable") {
+		t.Fatalf("entrypoint did not reject before BGP: %v", err)
 	}
 }

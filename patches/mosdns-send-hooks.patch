@@ -1,0 +1,187 @@
+diff --git a/pkg/server/send_hooks.go b/pkg/server/send_hooks.go
+new file mode 100644
+index 0000000..6b5c833
+--- /dev/null
++++ b/pkg/server/send_hooks.go
+@@ -0,0 +1,39 @@
++package server
++
++import "context"
++
++type sendHookKey struct{}
++type SendHooks struct {
++	before func() bool
++	after  func()
++}
++
++// WithSendHooks creates per-response state owned by a concrete socket writer.
++func WithSendHooks(ctx context.Context) (context.Context, *SendHooks) {
++	h := &SendHooks{}
++	return context.WithValue(ctx, sendHookKey{}, h), h
++}
++
++// HasSendHooks reports whether a guarded socket writer owns this response.
++func HasSendHooks(ctx context.Context) bool {
++	h, ok := ctx.Value(sendHookKey{}).(*SendHooks)
++	return ok && h.before == nil
++}
++
++// RegisterSendHooks returns false when the transport has no guarded writer.
++func RegisterSendHooks(ctx context.Context, before func() bool, after func()) bool {
++	h, ok := ctx.Value(sendHookKey{}).(*SendHooks)
++	if !ok || h.before != nil || before == nil || after == nil {
++		return false
++	}
++	h.before, h.after = before, after
++	return true
++}
++func (h *SendHooks) Before() bool { return h.before == nil || h.before() }
++
++// After is called after a socket write attempt, including uncertain/failed writes.
++func (h *SendHooks) After() {
++	if h.after != nil {
++		h.after()
++	}
++}
+diff --git a/pkg/server/send_hooks_test.go b/pkg/server/send_hooks_test.go
+new file mode 100644
+index 0000000..baabab9
+--- /dev/null
++++ b/pkg/server/send_hooks_test.go
+@@ -0,0 +1,86 @@
++package server
++
++import (
++	"context"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/miekg/dns"
++)
++
++type hookHandler struct {
++	before  chan struct{}
++	proceed chan bool
++	after   chan struct{}
++}
++
++func (h *hookHandler) Handle(ctx context.Context, q *dns.Msg, _ QueryMeta, pack func(*dns.Msg) (*[]byte, error)) *[]byte {
++	if !RegisterSendHooks(ctx, func() bool { close(h.before); return <-h.proceed }, func() { close(h.after) }) {
++		return nil
++	}
++	m := new(dns.Msg)
++	m.SetReply(q)
++	p, err := pack(m)
++	if err != nil {
++		return nil
++	}
++	return p
++}
++func TestSocketWriterHooks(t *testing.T) {
++	for _, network := range []string{"udp", "tcp"} {
++		t.Run(network, func(t *testing.T) {
++			h := &hookHandler{before: make(chan struct{}), proceed: make(chan bool, 1), after: make(chan struct{})}
++			var addr string
++			if network == "udp" {
++				l, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer l.Close()
++				addr = l.LocalAddr().String()
++				go ServeUDP(l, h, UDPServerOpts{})
++			} else {
++				l, err := net.Listen("tcp", "127.0.0.1:0")
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer l.Close()
++				addr = l.Addr().String()
++				go ServeTCP(l, h, TCPServerOpts{})
++			}
++			done := make(chan error, 1)
++			go func() {
++				c := dns.Client{Net: network, Timeout: time.Second}
++				q := new(dns.Msg)
++				q.SetQuestion("example.com.", dns.TypeA)
++				_, _, err := c.Exchange(q, addr)
++				done <- err
++			}()
++			select {
++			case <-h.before:
++			case <-time.After(time.Second):
++				t.Fatal("before not invoked")
++			}
++			select {
++			case err := <-done:
++				t.Fatalf("response before authorization: %v", err)
++			default:
++			}
++			h.proceed <- true
++			select {
++			case <-h.after:
++			case <-time.After(time.Second):
++				t.Fatal("after not invoked")
++			}
++			select {
++			case err := <-done:
++				if err != nil {
++					t.Fatal(err)
++				}
++			case <-time.After(time.Second):
++				t.Fatal("no response")
++			}
++		})
++	}
++}
+diff --git a/pkg/server/tcp.go b/pkg/server/tcp.go
+index 8af18bd..6373787 100644
+--- a/pkg/server/tcp.go
++++ b/pkg/server/tcp.go
+@@ -101,13 +101,19 @@ func ServeTCP(l net.Listener, h Handler, opts TCPServerOpts) error {
+ 					if ok {
+ 						clientAddr = ta.AddrPort().Addr()
+ 					}
+-					r := h.Handle(tcpConnCtx, req, QueryMeta{ClientAddr: clientAddr, ServerName: serverName}, pool.PackTCPBuffer)
++					sendCtx, hooks := WithSendHooks(tcpConnCtx)
++					r := h.Handle(sendCtx, req, QueryMeta{ClientAddr: clientAddr, ServerName: serverName}, pool.PackTCPBuffer)
+ 					if r == nil {
+ 						c.Close() // abort the connection
+ 						return
+ 					}
+ 					defer pool.ReleaseBuf(r)
+ 
++					if !hooks.Before() {
++						c.Close()
++						return
++					}
++					defer hooks.After()
+ 					if _, err := c.Write(*r); err != nil {
+ 						logger.Warn("failed to write response", zap.Stringer("client", c.RemoteAddr()), zap.Error(err))
+ 						return
+diff --git a/pkg/server/udp.go b/pkg/server/udp.go
+index aee5675..661225c 100644
+--- a/pkg/server/udp.go
++++ b/pkg/server/udp.go
+@@ -88,7 +88,8 @@ func ServeUDP(c *net.UDPConn, h Handler, opts UDPServerOpts) error {
+ 
+ 		// handle query
+ 		go func() {
+-			payload := h.Handle(listenerCtx, q, QueryMeta{ClientAddr: remoteAddr.Addr(), FromUDP: true}, pool.PackBuffer)
++			sendCtx, hooks := WithSendHooks(listenerCtx)
++			payload := h.Handle(sendCtx, q, QueryMeta{ClientAddr: remoteAddr.Addr(), FromUDP: true}, pool.PackBuffer)
+ 			if payload == nil {
+ 				return
+ 			}
+@@ -98,6 +99,10 @@ func ServeUDP(c *net.UDPConn, h Handler, opts UDPServerOpts) error {
+ 			if oobWriter != nil && dstIpFromCm != nil {
+ 				oob = oobWriter(dstIpFromCm)
+ 			}
++			if !hooks.Before() {
++				return
++			}
++			defer hooks.After()
+ 			if _, _, err := c.WriteMsgUDPAddrPort(*payload, oob, remoteAddr); err != nil {
+ 				logger.Warn("failed to write response", zap.Stringer("client", remoteAddr), zap.Error(err))
+ 			}

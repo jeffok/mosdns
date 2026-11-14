@@ -14,10 +14,11 @@ import (
 const PluginType = "ros_bgp"
 
 type Args struct {
-	Mode       string `yaml:"mode"`
-	Endpoint   string `yaml:"endpoint"`
-	SyncBudget string `yaml:"sync_budget"`
-	CNIPFile   string `yaml:"cn_ip_file"`
+	Mode        string `yaml:"mode"`
+	Endpoint    string `yaml:"endpoint"`
+	SyncBudget  string `yaml:"sync_budget"`
+	CNIPFile    string `yaml:"cn_ip_file"`
+	GuardWriter bool   `yaml:"guard_writer"`
 }
 
 func init() { coremain.RegNewPluginFunc(PluginType, Init, func() any { return new(Args) }) }

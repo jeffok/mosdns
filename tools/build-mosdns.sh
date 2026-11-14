@@ -27,6 +27,13 @@ prepare() {
   elif ! git -C "$UPSTREAM_DIR" apply --reverse --check "$patch" 2>/dev/null; then
     echo "response source patch does not match pinned upstream" >&2; exit 1
   fi
+  send_patch="$ROOT/patches/mosdns-send-hooks.patch"
+  [ -s "$send_patch" ] || { echo "missing send hooks patch" >&2; exit 1; }
+  if git -C "$UPSTREAM_DIR" apply --check "$send_patch" 2>/dev/null; then
+    git -C "$UPSTREAM_DIR" apply "$send_patch"
+  elif ! git -C "$UPSTREAM_DIR" apply --reverse --check "$send_patch" 2>/dev/null; then
+    echo "send hooks patch does not match pinned upstream" >&2; exit 1
+  fi
   cp "$ROOT/patches/fallback_route_source_test.go" "$UPSTREAM_DIR/plugin/executable/sequence/fallback/route_source_test.go"
   rm -rf "$UPSTREAM_DIR/plugin/executable/ros_bgp"
   mkdir -p "$UPSTREAM_DIR/plugin/executable/ros_bgp"

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
+	"github.com/IrineSistiana/mosdns/v5/pkg/server"
 	"github.com/miekg/dns"
 	"go4.org/netipx"
 )
@@ -177,5 +178,224 @@ func TestBGPFinalAnswerCapsAllTTLWithoutRaisingShortOrChangingEDNS(t *testing.T)
 	}
 	if q.R().Ns[0].Header().Ttl != 300 || q.RespOpt().Hdr.Ttl != beforeOPT {
 		t.Fatal("negative response TTL or EDNS flags changed incorrectly")
+	}
+}
+
+func TestBGPConfirmNonAResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, record string
+		qtype        uint16
+	}{
+		{"SRV", "example.com. 20 IN SRV 0 0 443 target.example.", dns.TypeSRV},
+		{"MX", "example.com. 20 IN MX 10 target.example.", dns.TypeMX},
+		{"HTTPS", "example.com. 20 IN HTTPS 1 target.example. ipv4hint=8.8.4.4", dns.TypeHTTPS},
+		{"SVCB", "example.com. 20 IN SVCB 1 target.example. ipv4hint=8.8.4.4", dns.TypeSVCB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			var got struct {
+				IPs []string `json:"ips"`
+				TTL uint32   `json:"ttl"`
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Error(err)
+				}
+				w.WriteHeader(204)
+			}))
+			defer srv.Close()
+			var b netipx.IPSetBuilder
+			cn, _ := b.IPSet()
+			p := &bgpConfirmPlugin{endpoint: srv.URL + "/confirm", cn: cn, client: srv.Client()}
+			msg := new(dns.Msg)
+			msg.SetQuestion("example.com.", tc.qtype)
+			q := query_context.NewContext(msg)
+			resp := new(dns.Msg)
+			resp.SetReply(q.Q())
+			rr, err := dns.NewRR(tc.record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Answer = []dns.RR{rr}
+			for _, ttl := range []uint32{100, 600} {
+				resp.Extra = append(resp.Extra, &dns.A{Hdr: dns.RR_Header{Name: "target.example.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl}, A: net.ParseIP("8.8.8.8")})
+			}
+			q.SetResponse(resp)
+			q.StoreValue(query_context.RouteSourceKey, bgpProvenance{at: time.Now()})
+			if err := p.Exec(context.Background(), q); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if tc.qtype == dns.TypeHTTPS || tc.qtype == dns.TypeSVCB {
+				want = 2
+			}
+			if calls != 1 || len(got.IPs) != want || got.TTL != 300 || q.R().Rcode != dns.RcodeSuccess || q.R().Answer[0].Header().Ttl != 20 || q.R().Extra[1].Header().Ttl != 300 {
+				t.Fatalf("calls=%d payload=%+v response=%+v", calls, got, q.R())
+			}
+		})
+	}
+}
+
+func TestBGPConfirmAdditionalAndHintFailClosed(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls++; w.WriteHeader(503) }))
+	defer srv.Close()
+	var b netipx.IPSetBuilder
+	cn, _ := b.IPSet()
+	p := &bgpConfirmPlugin{endpoint: srv.URL + "/confirm", cn: cn, client: srv.Client()}
+	for _, tc := range []struct {
+		name, rr, source string
+		wantCalls        int
+	}{
+		{"missing provenance additional", "target.example. 60 IN A 8.8.8.8", "", 0},
+		{"missing provenance hint", "target.example. 60 IN HTTPS 1 . ipv4hint=8.8.8.8", "", 0},
+		{"invalid additional", "target.example. 60 IN A 127.0.0.1", "global", 0},
+		{"invalid hint", "target.example. 60 IN HTTPS 1 . ipv4hint=127.0.0.1", "global", 0},
+		{"confirm failure", "target.example. 60 IN A 8.8.8.8", "global", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls = 0
+			msg := new(dns.Msg)
+			msg.SetQuestion("example.com.", dns.TypeMX)
+			q := query_context.NewContext(msg)
+			resp := new(dns.Msg)
+			resp.SetReply(q.Q())
+			rr, err := dns.NewRR(tc.rr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Extra = []dns.RR{rr}
+			q.SetResponse(resp)
+			if tc.source != "" {
+				q.StoreValue(query_context.RouteSourceKey, bgpProvenance{at: time.Now()})
+			}
+			if err := p.Exec(context.Background(), q); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tc.wantCalls || q.R().Rcode != dns.RcodeServerFailure || len(q.R().Extra) != 0 {
+				t.Fatalf("calls=%d response=%+v", calls, q.R())
+			}
+		})
+	}
+}
+
+func TestBGPConfirmBlocksUntilAckAndFailsOnCancellation(t *testing.T) {
+	for _, cancelBeforeAck := range []bool{false, true} {
+		name := "ack_before_return"
+		if cancelBeforeAck {
+			name = "cancel_before_ack"
+		}
+		t.Run(name, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(entered)
+				<-release
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer srv.Close()
+			var b netipx.IPSetBuilder
+			cn, _ := b.IPSet()
+			p := &bgpConfirmPlugin{endpoint: srv.URL + "/confirm", cn: cn, client: srv.Client()}
+			q := bgpQuery("8.8.8.8", 60, "global")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- p.Exec(ctx, q) }()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("confirm was not called")
+			}
+			select {
+			case <-done:
+				t.Fatal("returned before route confirmation")
+			default:
+			}
+			if cancelBeforeAck {
+				cancel()
+			}
+			close(release)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("confirmation did not return")
+			}
+			want := dns.RcodeSuccess
+			if cancelBeforeAck {
+				want = dns.RcodeServerFailure
+			}
+			if q.R().Rcode != want {
+				t.Fatalf("got rcode %d, want %d", q.R().Rcode, want)
+			}
+		})
+	}
+}
+
+func TestGuardWriterHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hook, may bool
+	}{{"no_hook", false, true}, {"successful_write", true, true}, {"may_send_denied", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := []string{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls = append(calls, r.URL.Path)
+				switch r.URL.Path {
+				case "/confirm":
+					w.WriteHeader(200)
+					_, _ = w.Write([]byte(`{"pin_id":"0123456789abcdef01234567"}`))
+				case "/guardpin/may-send":
+					if tc.may {
+						w.WriteHeader(204)
+					} else {
+						w.WriteHeader(503)
+					}
+				case "/guardpin/finish-sent":
+					w.WriteHeader(204)
+				default:
+					w.WriteHeader(404)
+				}
+			}))
+			defer srv.Close()
+			var b netipx.IPSetBuilder
+			cn, _ := b.IPSet()
+			p := &bgpConfirmPlugin{endpoint: srv.URL + "/confirm", cn: cn, client: srv.Client(), guardWriter: true}
+			q := bgpQuery("8.8.8.8", 60, "global")
+			ctx := context.Background()
+			var hooks *server.SendHooks
+			if tc.hook {
+				ctx, hooks = server.WithSendHooks(ctx)
+			}
+			if err := p.Exec(ctx, q); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.hook {
+				if q.R().Rcode != dns.RcodeServerFailure || len(calls) != 0 {
+					t.Fatalf("no writer must fail closed: %v", calls)
+				}
+				return
+			}
+			if q.R().Rcode != dns.RcodeSuccess || len(calls) != 1 {
+				t.Fatalf("bad reserve: %v", calls)
+			}
+			if allowed := hooks.Before(); allowed != tc.may {
+				t.Fatalf("before = %v", allowed)
+			}
+			if tc.may {
+				hooks.After()
+			}
+			want := 2
+			if tc.may {
+				want = 3
+			}
+			if len(calls) != want {
+				t.Fatalf("calls=%v", calls)
+			}
+		})
 	}
 }
