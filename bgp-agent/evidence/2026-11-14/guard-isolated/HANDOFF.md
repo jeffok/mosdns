@@ -22,3 +22,7 @@ Status: unfinished, not production-ready. User authorizes direct production cuto
 ## Entry points
 
 Repo branch `feat/bgp-validation`. Key paths: `bgp-agent/guard*.go`, `bgp-agent/ros/prod-README.md`, `bgp-agent/ros/iso-setup.rsc`, `iso-writer.rsc`, `iso-teardown.rsc`, `plugins/ros_bgp/`, `patches/`, `tests/guard-cross-component.sh`. Local tests run: `cd bgp-agent && go test -race ./... && go vet ./...`; `python3 -m unittest bgp-agent/ros/test_prod_writer_draft.py`; fixed-upstream real UDP/TCP and agent/mock-writer integration tests also ran. ROS-specific tests and integration outcomes are reported above; do not treat static tests as production evidence.
+
+## Router state at handoff
+
+The isolated test was stopped and its test table, peer, writer, scheduler, marked connections, temporary environment and test files were removed. Stable `jeffok/mosdns:bgp-unified-20261114.3` was restored from `mosdns-bgp-unified-candidate3.tar` as the sole `mosdns` container at .222, root `/mosdns/root-restored`, original `ENV_MOSDNS` and `MOUNT_MOSDNS`, start-on-boot and on-failure restart. ROS DNS remains `119.29.29.29`, ROS www disabled, zero BGP connections. A direct in-container qq.com DNS query returned NOERROR. No production BGP cutover occurred. SSH from the authorized host uses `ssh -T -o BatchMode=yes -p 57222 admin@ec190f65f21c.sn.mynetname.net`; use existing credentials, do not commit secrets.
