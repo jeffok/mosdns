@@ -1,0 +1,1280 @@
+{
+  "source_url": "https://tranco-list.eu/top-1m.csv.zip",
+  "source_archive_sha256": "0c1fb07bca635ab1febe4b3fe52331636801cbf4f831f24497cd638e9d4db84c",
+  "source_archive_zip_entry_timestamp": "2026-11-13 22:21 (ZIP metadata; timezone unspecified)",
+  "sample_date": "2026-11-14",
+  "rank_limit": 10000,
+  "seed": 202611140301,
+  "algorithm": "Python random.Random(seed).shuffle after filters; first 300",
+  "candidate_count": 9487,
+  "previous_unique_count": 400,
+  "previous_exclusion": "exact and stripping www.",
+  "excluded_suffixes": [
+    ".cn",
+    ".xn--fiqs8s"
+  ],
+  "excluded_substrings": [
+    "126.com",
+    "163.com",
+    "163yun",
+    "360.cn",
+    "360.com",
+    "4399",
+    "58.com",
+    "alibaba",
+    "alibabacloud",
+    "aliexpress",
+    "alipay",
+    "aliyun",
+    "aliyuncs",
+    "antgroup",
+    "autohome",
+    "baidu",
+    "bilibili",
+    "bytedance",
+    "cnblogs",
+    "csdn",
+    "ctrip",
+    "dianping",
+    "dongchedi",
+    "douyin",
+    "gitee",
+    "huawei",
+    "ifeng",
+    "iqiyi",
+    "jd.com",
+    "kuaishou",
+    "kugou",
+    "kuwo",
+    "meituan",
+    "mi.com",
+    "netease",
+    "pinduoduo",
+    "qq.com",
+    "qunar",
+    "shein.com",
+    "sina",
+    "sogou",
+    "sohu",
+    "taobao",
+    "temu.com",
+    "tencent",
+    "tiktok",
+    "toutiao",
+    "trip.com",
+    "wechat",
+    "weibo",
+    "weixin",
+    "xhslink",
+    "xiaohongshu",
+    "xiaomi",
+    "yiche",
+    "youku",
+    "zhihu",
+    "zhimg",
+    "zhipin"
+  ],
+  "selection": [
+    {
+      "rank": 5530,
+      "domain": "tv2.no"
+    },
+    {
+      "rank": 872,
+      "domain": "frontiersin.org"
+    },
+    {
+      "rank": 4010,
+      "domain": "bytegle.tech"
+    },
+    {
+      "rank": 7308,
+      "domain": "akc.org"
+    },
+    {
+      "rank": 9782,
+      "domain": "sapphireonline.pk"
+    },
+    {
+      "rank": 1877,
+      "domain": "akismet.com"
+    },
+    {
+      "rank": 9931,
+      "domain": "adcam.org"
+    },
+    {
+      "rank": 9080,
+      "domain": "rb.gy"
+    },
+    {
+      "rank": 5806,
+      "domain": "stream-io-api.com"
+    },
+    {
+      "rank": 9381,
+      "domain": "futbolfantasy.com"
+    },
+    {
+      "rank": 2554,
+      "domain": "gdemoideti.ru"
+    },
+    {
+      "rank": 1460,
+      "domain": "starfall.com"
+    },
+    {
+      "rank": 5877,
+      "domain": "inss.gov.br"
+    },
+    {
+      "rank": 5714,
+      "domain": "enlaces.edu.sv"
+    },
+    {
+      "rank": 8854,
+      "domain": "ncore.pro"
+    },
+    {
+      "rank": 2377,
+      "domain": "politico.com"
+    },
+    {
+      "rank": 7568,
+      "domain": "transfermarkt.com.tr"
+    },
+    {
+      "rank": 9887,
+      "domain": "mzansipornvideos.com"
+    },
+    {
+      "rank": 859,
+      "domain": "myspace.com"
+    },
+    {
+      "rank": 1436,
+      "domain": "beeg.porn"
+    },
+    {
+      "rank": 2799,
+      "domain": "wixdns.net"
+    },
+    {
+      "rank": 2592,
+      "domain": "zscaler.com"
+    },
+    {
+      "rank": 3189,
+      "domain": "comodoca.com"
+    },
+    {
+      "rank": 3095,
+      "domain": "harman.com"
+    },
+    {
+      "rank": 9267,
+      "domain": "flashscore.ua"
+    },
+    {
+      "rank": 1141,
+      "domain": "plos.org"
+    },
+    {
+      "rank": 7413,
+      "domain": "personio.com"
+    },
+    {
+      "rank": 1806,
+      "domain": "usnews.com"
+    },
+    {
+      "rank": 6389,
+      "domain": "icons8.com"
+    },
+    {
+      "rank": 8339,
+      "domain": "senat.fr"
+    },
+    {
+      "rank": 2366,
+      "domain": "hubspot.net"
+    },
+    {
+      "rank": 1417,
+      "domain": "inps.it"
+    },
+    {
+      "rank": 1656,
+      "domain": "izy0.com"
+    },
+    {
+      "rank": 6309,
+      "domain": "createjs.com"
+    },
+    {
+      "rank": 9414,
+      "domain": "pointtown.com"
+    },
+    {
+      "rank": 6244,
+      "domain": "learnosity.com"
+    },
+    {
+      "rank": 9598,
+      "domain": "gamblingcommission.gov.uk"
+    },
+    {
+      "rank": 8767,
+      "domain": "tanishq.co.in"
+    },
+    {
+      "rank": 4849,
+      "domain": "your-storagebox.de"
+    },
+    {
+      "rank": 8743,
+      "domain": "hotpornphotos.com"
+    },
+    {
+      "rank": 9334,
+      "domain": "blockaway.net"
+    },
+    {
+      "rank": 1085,
+      "domain": "abovedomains.com"
+    },
+    {
+      "rank": 9359,
+      "domain": "stationerybrazil.com"
+    },
+    {
+      "rank": 945,
+      "domain": "volcgslb.com"
+    },
+    {
+      "rank": 3632,
+      "domain": "amazon.eg"
+    },
+    {
+      "rank": 2252,
+      "domain": "pwc.com"
+    },
+    {
+      "rank": 819,
+      "domain": "onlyfans.com"
+    },
+    {
+      "rank": 9841,
+      "domain": "awsdns-41.net"
+    },
+    {
+      "rank": 7486,
+      "domain": "record.pt"
+    },
+    {
+      "rank": 6162,
+      "domain": "chefkoch.de"
+    },
+    {
+      "rank": 9208,
+      "domain": "kantimehealth.net"
+    },
+    {
+      "rank": 5077,
+      "domain": "ijg.org"
+    },
+    {
+      "rank": 3605,
+      "domain": "volvocars.com"
+    },
+    {
+      "rank": 4365,
+      "domain": "vseinstrumenti.ru"
+    },
+    {
+      "rank": 3082,
+      "domain": "citrix.com"
+    },
+    {
+      "rank": 6710,
+      "domain": "haplat.net"
+    },
+    {
+      "rank": 9546,
+      "domain": "garotocomlocal.com.br"
+    },
+    {
+      "rank": 4978,
+      "domain": "github.blog"
+    },
+    {
+      "rank": 2880,
+      "domain": "armgs.team"
+    },
+    {
+      "rank": 5282,
+      "domain": "heroku.com"
+    },
+    {
+      "rank": 1311,
+      "domain": "umn.edu"
+    },
+    {
+      "rank": 3767,
+      "domain": "itau.com.br"
+    },
+    {
+      "rank": 3689,
+      "domain": "porsche.com"
+    },
+    {
+      "rank": 3186,
+      "domain": "website-files.com"
+    },
+    {
+      "rank": 8491,
+      "domain": "tcdnlive.com"
+    },
+    {
+      "rank": 7471,
+      "domain": "jharkhand.gov.in"
+    },
+    {
+      "rank": 7260,
+      "domain": "rentry.co"
+    },
+    {
+      "rank": 7721,
+      "domain": "cricketwireless.com"
+    },
+    {
+      "rank": 748,
+      "domain": "python.org"
+    },
+    {
+      "rank": 7791,
+      "domain": "shareasale.com"
+    },
+    {
+      "rank": 2026,
+      "domain": "tinkoff.ru"
+    },
+    {
+      "rank": 1015,
+      "domain": "konami.net"
+    },
+    {
+      "rank": 9562,
+      "domain": "unu.im"
+    },
+    {
+      "rank": 5440,
+      "domain": "playfamily.ru"
+    },
+    {
+      "rank": 4279,
+      "domain": "bids.ws"
+    },
+    {
+      "rank": 9337,
+      "domain": "ads-tinyorbit.com"
+    },
+    {
+      "rank": 6486,
+      "domain": "twstalker.com"
+    },
+    {
+      "rank": 9345,
+      "domain": "wcd.gov.in"
+    },
+    {
+      "rank": 1124,
+      "domain": "magnific.com"
+    },
+    {
+      "rank": 7742,
+      "domain": "freebit.net"
+    },
+    {
+      "rank": 4309,
+      "domain": "britishcouncil.org"
+    },
+    {
+      "rank": 2186,
+      "domain": "gvt3.com"
+    },
+    {
+      "rank": 8111,
+      "domain": "roborock.com"
+    },
+    {
+      "rank": 6520,
+      "domain": "z.ai"
+    },
+    {
+      "rank": 7700,
+      "domain": "modelcontextprotocol.io"
+    },
+    {
+      "rank": 6564,
+      "domain": "oath.com"
+    },
+    {
+      "rank": 7905,
+      "domain": "edgecdn.world"
+    },
+    {
+      "rank": 6418,
+      "domain": "real.com"
+    },
+    {
+      "rank": 7422,
+      "domain": "zabbix.com"
+    },
+    {
+      "rank": 5510,
+      "domain": "toomics.com"
+    },
+    {
+      "rank": 7215,
+      "domain": "x9fnzrtl4x8pynsf.com"
+    },
+    {
+      "rank": 4656,
+      "domain": "zalan.do"
+    },
+    {
+      "rank": 8179,
+      "domain": "onlinetestpad.com"
+    },
+    {
+      "rank": 9960,
+      "domain": "egy69.com"
+    },
+    {
+      "rank": 5477,
+      "domain": "nameshift.com"
+    },
+    {
+      "rank": 2559,
+      "domain": "okx.com"
+    },
+    {
+      "rank": 1435,
+      "domain": "elsevier.com"
+    },
+    {
+      "rank": 1718,
+      "domain": "betpawa.ug"
+    },
+    {
+      "rank": 7674,
+      "domain": "zdusercontent.com"
+    },
+    {
+      "rank": 743,
+      "domain": "dv.tech"
+    },
+    {
+      "rank": 8196,
+      "domain": "iowa.gov"
+    },
+    {
+      "rank": 7717,
+      "domain": "thekitchn.com"
+    },
+    {
+      "rank": 7577,
+      "domain": "dnsimple-edge.com"
+    },
+    {
+      "rank": 6166,
+      "domain": "attdns.com"
+    },
+    {
+      "rank": 5035,
+      "domain": "reverbnation.com"
+    },
+    {
+      "rank": 7878,
+      "domain": "auctollo.com"
+    },
+    {
+      "rank": 1654,
+      "domain": "arabxn.sex"
+    },
+    {
+      "rank": 761,
+      "domain": "dbankcloud.com"
+    },
+    {
+      "rank": 8723,
+      "domain": "tv-tokyo.co.jp"
+    },
+    {
+      "rank": 6650,
+      "domain": "elcorreo.com"
+    },
+    {
+      "rank": 6265,
+      "domain": "uni-goettingen.de"
+    },
+    {
+      "rank": 3783,
+      "domain": "ohthree.com"
+    },
+    {
+      "rank": 5996,
+      "domain": "yorku.ca"
+    },
+    {
+      "rank": 3587,
+      "domain": "oppomobile.com"
+    },
+    {
+      "rank": 5947,
+      "domain": "5ch.io"
+    },
+    {
+      "rank": 5879,
+      "domain": "eonline.com"
+    },
+    {
+      "rank": 7323,
+      "domain": "xn--pckua2a7gp15o89zb.com"
+    },
+    {
+      "rank": 3402,
+      "domain": "today.com"
+    },
+    {
+      "rank": 4373,
+      "domain": "dyndns.tv"
+    },
+    {
+      "rank": 6982,
+      "domain": "about.google"
+    },
+    {
+      "rank": 9753,
+      "domain": "gemidos.tv"
+    },
+    {
+      "rank": 3952,
+      "domain": "mercedes-benz.com"
+    },
+    {
+      "rank": 4367,
+      "domain": "ew.com"
+    },
+    {
+      "rank": 7650,
+      "domain": "iau.ir"
+    },
+    {
+      "rank": 5041,
+      "domain": "maxpreps.com"
+    },
+    {
+      "rank": 1501,
+      "domain": "tapad.com"
+    },
+    {
+      "rank": 2315,
+      "domain": "browserleaks.org"
+    },
+    {
+      "rank": 5578,
+      "domain": "rug.nl"
+    },
+    {
+      "rank": 7618,
+      "domain": "brasil247.com"
+    },
+    {
+      "rank": 861,
+      "domain": "deloitte.com"
+    },
+    {
+      "rank": 4745,
+      "domain": "uni-kiel.de"
+    },
+    {
+      "rank": 406,
+      "domain": "nexthink.cloud"
+    },
+    {
+      "rank": 7537,
+      "domain": "thredup.com"
+    },
+    {
+      "rank": 3279,
+      "domain": "si.com"
+    },
+    {
+      "rank": 5812,
+      "domain": "cdnhwctnm107.com"
+    },
+    {
+      "rank": 4510,
+      "domain": "kaggle.com"
+    },
+    {
+      "rank": 3467,
+      "domain": "syncingbridge.com"
+    },
+    {
+      "rank": 9472,
+      "domain": "poco.de"
+    },
+    {
+      "rank": 4981,
+      "domain": "prweb.com"
+    },
+    {
+      "rank": 5134,
+      "domain": "tv-asahi.co.jp"
+    },
+    {
+      "rank": 1548,
+      "domain": "aka.ms"
+    },
+    {
+      "rank": 4128,
+      "domain": "100.app"
+    },
+    {
+      "rank": 7008,
+      "domain": "dwcdn.net"
+    },
+    {
+      "rank": 1981,
+      "domain": "filmyfly.sale"
+    },
+    {
+      "rank": 3205,
+      "domain": "sprinklr.com"
+    },
+    {
+      "rank": 6616,
+      "domain": "bancsabadell.com"
+    },
+    {
+      "rank": 6461,
+      "domain": "ahagamecenter.com"
+    },
+    {
+      "rank": 8944,
+      "domain": "account.gov.uk"
+    },
+    {
+      "rank": 686,
+      "domain": "xhamster.com"
+    },
+    {
+      "rank": 1884,
+      "domain": "deezer.com"
+    },
+    {
+      "rank": 5199,
+      "domain": "skynet.be"
+    },
+    {
+      "rank": 1083,
+      "domain": "sendgrid.net"
+    },
+    {
+      "rank": 6518,
+      "domain": "zg-api.com"
+    },
+    {
+      "rank": 6046,
+      "domain": "edmunds.com"
+    },
+    {
+      "rank": 799,
+      "domain": "agora.io"
+    },
+    {
+      "rank": 7991,
+      "domain": "mlive.com"
+    },
+    {
+      "rank": 568,
+      "domain": "noaa.gov"
+    },
+    {
+      "rank": 9346,
+      "domain": "rakuten.tv"
+    },
+    {
+      "rank": 8135,
+      "domain": "clasohlson.com"
+    },
+    {
+      "rank": 2571,
+      "domain": "admatic.de"
+    },
+    {
+      "rank": 6164,
+      "domain": "sportradarserving.com"
+    },
+    {
+      "rank": 4344,
+      "domain": "dickssportinggoods.com"
+    },
+    {
+      "rank": 2356,
+      "domain": "lefigaro.fr"
+    },
+    {
+      "rank": 2863,
+      "domain": "magonet.ru"
+    },
+    {
+      "rank": 7602,
+      "domain": "codefusion.technology"
+    },
+    {
+      "rank": 4865,
+      "domain": "facemojikeyboard.com"
+    },
+    {
+      "rank": 8687,
+      "domain": "deti-online.com"
+    },
+    {
+      "rank": 3194,
+      "domain": "novell.com"
+    },
+    {
+      "rank": 6234,
+      "domain": "binance.info"
+    },
+    {
+      "rank": 5656,
+      "domain": "meti.go.jp"
+    },
+    {
+      "rank": 436,
+      "domain": "visualstudio.com"
+    },
+    {
+      "rank": 8140,
+      "domain": "runnr.in"
+    },
+    {
+      "rank": 9866,
+      "domain": "kolesa.kz"
+    },
+    {
+      "rank": 2596,
+      "domain": "express.co.uk"
+    },
+    {
+      "rank": 534,
+      "domain": "mega.co.nz"
+    },
+    {
+      "rank": 7143,
+      "domain": "so-net.ne.jp"
+    },
+    {
+      "rank": 1239,
+      "domain": "xerox.com"
+    },
+    {
+      "rank": 9975,
+      "domain": "morgenpost.de"
+    },
+    {
+      "rank": 5509,
+      "domain": "thepiratebay.org"
+    },
+    {
+      "rank": 385,
+      "domain": "awsglobalaccelerator.com"
+    },
+    {
+      "rank": 3505,
+      "domain": "awsdns-07.com"
+    },
+    {
+      "rank": 7487,
+      "domain": "bunte.de"
+    },
+    {
+      "rank": 7916,
+      "domain": "sisal.it"
+    },
+    {
+      "rank": 8983,
+      "domain": "bodgirls.com"
+    },
+    {
+      "rank": 1279,
+      "domain": "pixiepuff.ru"
+    },
+    {
+      "rank": 4715,
+      "domain": "microsoft365.com"
+    },
+    {
+      "rank": 9517,
+      "domain": "arenaplus.ph"
+    },
+    {
+      "rank": 8913,
+      "domain": "decathlon.in"
+    },
+    {
+      "rank": 4097,
+      "domain": "umass.edu"
+    },
+    {
+      "rank": 8443,
+      "domain": "webassign.net"
+    },
+    {
+      "rank": 3896,
+      "domain": "tpnet.pl"
+    },
+    {
+      "rank": 2209,
+      "domain": "getbootstrap.com"
+    },
+    {
+      "rank": 2671,
+      "domain": "rspamd.com"
+    },
+    {
+      "rank": 680,
+      "domain": "inner-active.mobi"
+    },
+    {
+      "rank": 7086,
+      "domain": "dxc.com"
+    },
+    {
+      "rank": 6643,
+      "domain": "csiro.au"
+    },
+    {
+      "rank": 8705,
+      "domain": "seg-social.gob.es"
+    },
+    {
+      "rank": 2364,
+      "domain": "gccdn.net"
+    },
+    {
+      "rank": 695,
+      "domain": "telefonica.de"
+    },
+    {
+      "rank": 7749,
+      "domain": "turboscribe.ai"
+    },
+    {
+      "rank": 6988,
+      "domain": "google.co.zw"
+    },
+    {
+      "rank": 5779,
+      "domain": "golang.org"
+    },
+    {
+      "rank": 4341,
+      "domain": "fastecn.com"
+    },
+    {
+      "rank": 8070,
+      "domain": "phonepe.com"
+    },
+    {
+      "rank": 9389,
+      "domain": "bibliocommons.com"
+    },
+    {
+      "rank": 7675,
+      "domain": "leggo.it"
+    },
+    {
+      "rank": 4853,
+      "domain": "shaw.ca"
+    },
+    {
+      "rank": 9605,
+      "domain": "0lin.com"
+    },
+    {
+      "rank": 3800,
+      "domain": "spdns.de"
+    },
+    {
+      "rank": 448,
+      "domain": "heytapdl.com"
+    },
+    {
+      "rank": 6522,
+      "domain": "sf.net"
+    },
+    {
+      "rank": 240,
+      "domain": "charter.net"
+    },
+    {
+      "rank": 8367,
+      "domain": "cnnamador.com"
+    },
+    {
+      "rank": 8469,
+      "domain": "awsdns-35.net"
+    },
+    {
+      "rank": 1294,
+      "domain": "actu.fr"
+    },
+    {
+      "rank": 7612,
+      "domain": "allthefallen.moe"
+    },
+    {
+      "rank": 3625,
+      "domain": "johndeerecloud.com"
+    },
+    {
+      "rank": 8776,
+      "domain": "google.by"
+    },
+    {
+      "rank": 4357,
+      "domain": "amazonsilk.com"
+    },
+    {
+      "rank": 735,
+      "domain": "bitrix24.ru"
+    },
+    {
+      "rank": 9814,
+      "domain": "shkolo.bg"
+    },
+    {
+      "rank": 1142,
+      "domain": "cspserver.net"
+    },
+    {
+      "rank": 8939,
+      "domain": "digitaleast.mobi"
+    },
+    {
+      "rank": 2754,
+      "domain": "dnsip.com"
+    },
+    {
+      "rank": 569,
+      "domain": "wired.com"
+    },
+    {
+      "rank": 1329,
+      "domain": "itmedia.co.jp"
+    },
+    {
+      "rank": 2766,
+      "domain": "topdns.me"
+    },
+    {
+      "rank": 9625,
+      "domain": "vercomicsporno.com"
+    },
+    {
+      "rank": 6816,
+      "domain": "poly.com"
+    },
+    {
+      "rank": 8732,
+      "domain": "name-servers.gr"
+    },
+    {
+      "rank": 1312,
+      "domain": "noodlemagazine.com"
+    },
+    {
+      "rank": 3089,
+      "domain": "awsdns-03.com"
+    },
+    {
+      "rank": 9040,
+      "domain": "umbc.edu"
+    },
+    {
+      "rank": 3352,
+      "domain": "awsdns-13.com"
+    },
+    {
+      "rank": 2866,
+      "domain": "byteplusvod.com"
+    },
+    {
+      "rank": 7386,
+      "domain": "benesse.ne.jp"
+    },
+    {
+      "rank": 8856,
+      "domain": "mgln.ai"
+    },
+    {
+      "rank": 6926,
+      "domain": "nag.ru"
+    },
+    {
+      "rank": 6631,
+      "domain": "eyeo.com"
+    },
+    {
+      "rank": 5191,
+      "domain": "akadns99.net"
+    },
+    {
+      "rank": 2628,
+      "domain": "betweendigital.com"
+    },
+    {
+      "rank": 4521,
+      "domain": "reclameaqui.com.br"
+    },
+    {
+      "rank": 1367,
+      "domain": "kargo.com"
+    },
+    {
+      "rank": 8860,
+      "domain": "gismeteo.kz"
+    },
+    {
+      "rank": 4067,
+      "domain": "studentaid.gov"
+    },
+    {
+      "rank": 9612,
+      "domain": "idaho.gov"
+    },
+    {
+      "rank": 8663,
+      "domain": "w-x.co"
+    },
+    {
+      "rank": 8088,
+      "domain": "dishtech.org"
+    },
+    {
+      "rank": 1219,
+      "domain": "marktplaats.nl"
+    },
+    {
+      "rank": 4934,
+      "domain": "pdf24.org"
+    },
+    {
+      "rank": 7432,
+      "domain": "nettavisen.no"
+    },
+    {
+      "rank": 9147,
+      "domain": "pendingrenewaldeletion.com"
+    },
+    {
+      "rank": 7630,
+      "domain": "beatport.com"
+    },
+    {
+      "rank": 4802,
+      "domain": "rostelecom.ru"
+    },
+    {
+      "rank": 750,
+      "domain": "shopee.co.id"
+    },
+    {
+      "rank": 3150,
+      "domain": "2o7.net"
+    },
+    {
+      "rank": 4115,
+      "domain": "awsdns-31.com"
+    },
+    {
+      "rank": 6714,
+      "domain": "quran.com"
+    },
+    {
+      "rank": 6669,
+      "domain": "abplive.com"
+    },
+    {
+      "rank": 496,
+      "domain": "netangels.ru"
+    },
+    {
+      "rank": 7809,
+      "domain": "trezor.io"
+    },
+    {
+      "rank": 6139,
+      "domain": "uni-freiburg.de"
+    },
+    {
+      "rank": 8715,
+      "domain": "my-imcloud.com"
+    },
+    {
+      "rank": 2158,
+      "domain": "apple.news"
+    },
+    {
+      "rank": 2715,
+      "domain": "ko-fi.com"
+    },
+    {
+      "rank": 1060,
+      "domain": "mhverifier.ru"
+    },
+    {
+      "rank": 2206,
+      "domain": "jino.ru"
+    },
+    {
+      "rank": 2848,
+      "domain": "ns.ph"
+    },
+    {
+      "rank": 3882,
+      "domain": "trimble.com"
+    },
+    {
+      "rank": 3199,
+      "domain": "tradingeconomics.com"
+    },
+    {
+      "rank": 2560,
+      "domain": "lww.com"
+    },
+    {
+      "rank": 6397,
+      "domain": "amazoncognito.com"
+    },
+    {
+      "rank": 7211,
+      "domain": "youradchoices.ca"
+    },
+    {
+      "rank": 5190,
+      "domain": "strmd.st"
+    },
+    {
+      "rank": 7814,
+      "domain": "athena.io"
+    },
+    {
+      "rank": 2857,
+      "domain": "sureserver.com"
+    },
+    {
+      "rank": 5871,
+      "domain": "tds.net"
+    },
+    {
+      "rank": 5800,
+      "domain": "ext-twitch.tv"
+    },
+    {
+      "rank": 9309,
+      "domain": "kingoftime.jp"
+    },
+    {
+      "rank": 9097,
+      "domain": "surabaya.go.id"
+    },
+    {
+      "rank": 4983,
+      "domain": "leakgallery.com"
+    },
+    {
+      "rank": 4276,
+      "domain": "intelbras.com.br"
+    },
+    {
+      "rank": 6176,
+      "domain": "gamesradar.com"
+    },
+    {
+      "rank": 4409,
+      "domain": "belkin.com"
+    },
+    {
+      "rank": 9747,
+      "domain": "ardentnews.co.kr"
+    },
+    {
+      "rank": 4708,
+      "domain": "pravda.com.ua"
+    },
+    {
+      "rank": 6133,
+      "domain": "mixi.jp"
+    },
+    {
+      "rank": 4513,
+      "domain": "project-limelight.com"
+    },
+    {
+      "rank": 2458,
+      "domain": "faa.gov"
+    },
+    {
+      "rank": 5252,
+      "domain": "neilpatel.com"
+    },
+    {
+      "rank": 7488,
+      "domain": "sberbank-tele.com"
+    },
+    {
+      "rank": 9797,
+      "domain": "muscache.com"
+    },
+    {
+      "rank": 6428,
+      "domain": "wedos.cz"
+    },
+    {
+      "rank": 7527,
+      "domain": "irancell.ir"
+    },
+    {
+      "rank": 3110,
+      "domain": "paypal.me"
+    },
+    {
+      "rank": 513,
+      "domain": "list-manage.com"
+    },
+    {
+      "rank": 8263,
+      "domain": "cic.fr"
+    },
+    {
+      "rank": 5531,
+      "domain": "anyrtb.com"
+    },
+    {
+      "rank": 3414,
+      "domain": "symcb.com"
+    },
+    {
+      "rank": 7922,
+      "domain": "lotterypost.com"
+    }
+  ],
+  "dns_prefilter": "none"
+}
