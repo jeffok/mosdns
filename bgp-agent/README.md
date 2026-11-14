@@ -59,3 +59,35 @@ HTTPS 验证使用正常证书校验。镜像包含 CA 信任库，不通过跳�
 至少验证预热命中、陌生 IP 首次访问、缓存命中、服务重启、邻居断开重连、跨域名共享 IP、候选回收及专用测试 IP 撤路。测试表不得有掩盖 BGP 失效的 OVPN 默认路由，测试流量不得被旧 REST 地址池规则或 FastTrack 接管。控制用的 DNS 上游路由需单独核对，避免测试策略把上游查询送错出口。
 
 验证失败时，停止新容器和 ROS 回报任务，撤销仅属于 BGP 验证的路由策略、邻居及测试表；家庭 DNS 继续使用 `119.29.29.29`。不清空全网 conntrack，不删除 OVPN 证书，不把旧连接改标记后当成首次访问成功。完整上线前还需处理国内域名策略、来源一致性、客户端自带 DNS、映射/路由容量及长连接撤路影响，不能将本镜像作为全家长期 DNS 直接切换。
+
+
+## 2026-11-14 szhome 验证结果
+
+构建源码提交 `aba20ed2bcc7b6aeba266d259d367fdfa4f616ea`；固定验证镜像
+`jeffok/mosdns-bgp:bgp-validation-20261114.1` 已在本机构建并导入 RouterOS，未推送镜像仓库。
+镜像 ID 为 `sha256:cc5584c2c92906d25922cc4be2fd179c8924f75c266647955ae9e86c26d03f77`。
+镜像与 ROS 上 `/usr/bin/bgp-agent` 的 SHA256 均为
+`d6dfbb36aa62e0b7e418b2b326784dda25e96b4b3a4aada0636effc1d966b1b9`。
+
+- 20 个测试函数及 `go test -race ./...`、`go vet ./...` 通过。
+- 家庭 DNS 已按授权改为仅 `119.29.29.29`，`cache-max-ttl=5m`；旧 mosdns 保留。
+- 测试容器 `192.168.88.223`、测试表 `rt-bgp-test`；独立复核见 `ros/VERIFICATION.md`。
+- 无 ROS ACK 时：约 2.54 秒返回 SERVFAIL，答案为空；ACK 过期时约 2.50 秒失败关闭。
+- ACK 有效的 GitHub 缓存查询约 1.24 ms，HTTPS 200 约 198 ms。
+- 陌生目标 `www.wikipedia.org`：DNS 约 944 ms；ROS 首个 SYN 日志明确为
+  `out:ovpn-szof, connection-mark:cm-bgp-test`。HTTPS 握手完成后该站返回 403，
+  这是路由/首包证据，不计为该网站应用可用性通过。
+- 暂停 ACK 时，国内地址 `dns.alidns.com` 仍返回 223.5.5.5、223.6.6.6，TTL 300。
+- BGP 邻居禁用时，海外查询约 1.22 ms 返回 SERVFAIL；恢复后 Google HTTPS 204 约 186 ms。
+- 容器停止后测试 BGP 路由归零；重启恢复 51 条保存路由，刷新后 52 条；
+  GitHub HTTPS 200 约 200 ms。main 表 BGP 路由仍为 0。
+- 10 个常用域名及实际子域预解析已运行；旧 IP 保留 24 小时，GC 扫描只记录候选。
+  共享引用、撤路、安全期与持久恢复已作单元测试；未声称已完成真实 24 小时自动回收验收。
+
+当前测试容器运行、ACK 定时器开启，容器 `start-on-boot=no`。临时首 SYN 日志规则已删除。
+本地归档、规则快照、配置、源码指纹和验证 JSON 位于 `.cache/bgp-agent/bgp-validation-20261114.1/`。
+
+**上线限制**：本服务目前是全部使用全球上游的隔离验证解析器，尚未接入现有 mosdns 的完整国内域名与 fallback 策略。
+尤其国内域名若由全球 DNS 返回海外 CDN 地址，本验证器会按 IP 判定走代理，不能将这一行为作为生产国内分流验收。
+当前不协商 Graceful Restart，服务停止会撤路；24 小时业务保留期不能保护 BGP 会话失效时的路由，
+也不能保证任意长连接在撤路后不中断。扩大到真实客户端前必须确定重启保留、冷路由回收及长连接策略。
