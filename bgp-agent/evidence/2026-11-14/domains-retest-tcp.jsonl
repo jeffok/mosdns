@@ -1,0 +1,7 @@
+{"domain":"www.sina.com.cn","dns":"NOERROR","ips":["163.181.87.50","163.181.87.67","163.181.87.69","163.181.87.70","163.181.87.88","163.181.87.71","163.181.87.87","163.181.87.68"],"ttl":6,"dns_ms":124,"http_status":200,"http_ms":157}
+{"domain":"www.douyin.com","dns":"NOERROR","ips":["163.181.87.88","163.181.87.50","163.181.87.67","163.181.87.68","163.181.87.69","163.181.87.70","163.181.87.71","163.181.87.87"],"ttl":16,"dns_ms":124,"http_status":444,"http_ms":410}
+{"domain":"facebook.com","dns":"NOERROR","ips":["57.144.150.1"],"ttl":49,"dns_ms":43,"http_status":301,"http_ms":345}
+{"domain":"appsflyersdk.com","dns":"NOERROR","ips":["65.9.168.65","65.9.168.12","65.9.168.117","65.9.168.114"],"ttl":3,"dns_ms":48,"http_status":403,"http_ms":139}
+{"domain":"amazonaws.com","dns":"NOERROR","ips":["15.197.250.250","166.117.149.112"],"ttl":164,"dns_ms":134,"http_status":301,"http_ms":734}
+{"domain":"office.com","dns":"NOERROR","ips":["13.107.6.156"],"ttl":10,"dns_ms":47,"http_status":301,"http_ms":284}
+{"domain":"lsrelayaccess.com","dns":"SERVFAIL","ips":null,"ttl":300,"dns_ms":2552,"http_status":0,"http_ms":0}
