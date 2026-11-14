@@ -3,8 +3,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +29,37 @@ type fakePublication struct {
 	notify  chan string
 	addErr  error
 	delErr  error
+}
+
+func TestDesiredLargeSnapshotHasContentLength(t *testing.T) {
+	a, _ := testApp(t)
+	a.mu.Lock()
+	for i := 0; i < 512; i++ {
+		prefix := fmt.Sprintf("198.18.%d.%d/32", i/256, i%256)
+		a.routes[prefix] = &lease{Prefix: prefix}
+	}
+	a.mu.Unlock()
+	s := httptest.NewServer(a.httpHandler())
+	t.Cleanup(s.Close)
+	resp, err := s.Client().Get(s.URL + "/desired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) < 2048 || resp.ContentLength != int64(len(body)) || len(resp.TransferEncoding) != 0 {
+		t.Fatalf("unexpected response framing: body=%d content-length=%d transfer-encoding=%v", len(body), resp.ContentLength, resp.TransferEncoding)
+	}
+	var snapshot struct {
+		Epoch    string   `json:"epoch"`
+		Prefixes []string `json:"prefixes"`
+	}
+	if err := json.Unmarshal(body, &snapshot); err != nil || snapshot.Epoch != currentEpoch(a) || len(snapshot.Prefixes) != 512 {
+		t.Fatalf("invalid snapshot: epoch=%q prefixes=%d err=%v", snapshot.Epoch, len(snapshot.Prefixes), err)
+	}
 }
 
 func (p *fakePublication) Add(prefix string) ([]byte, error) {
@@ -89,6 +122,14 @@ func testApp(t *testing.T) (*app, *fakePublication) {
 	return a, p
 }
 
+func testAcknowledge(a *app, epoch string, prefixes []string) error {
+	_, id, _, err := a.issueSnapshot()
+	if err != nil {
+		return err
+	}
+	return a.acknowledge(epoch, id, prefixes)
+}
+
 func currentEpoch(a *app) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -113,7 +154,7 @@ func TestEnsureWaitsForROSActiveRouteAcknowledgement(t *testing.T) {
 		t.Fatalf("DNS route gate returned before ROS acknowledgement: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	if err := a.acknowledge(currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -149,21 +190,21 @@ func TestStaleAcknowledgementsCannotReleaseDNS(t *testing.T) {
 			epoch := currentEpoch(a)
 			switch mode {
 			case "wrong-epoch":
-				if err := a.acknowledge("old-epoch", []string{"8.8.4.4/32"}); err == nil {
+				if err := testAcknowledge(a, "old-epoch", []string{"8.8.4.4/32"}); err == nil {
 					t.Fatal("old epoch was accepted")
 				}
 			case "expired":
-				if err := a.acknowledge(epoch, []string{"8.8.4.4/32"}); err != nil {
+				if err := testAcknowledge(a, epoch, []string{"8.8.4.4/32"}); err != nil {
 					t.Fatal(err)
 				}
 				a.routes["8.8.4.4/32"].AckAt = time.Now().Add(-2 * time.Second)
 			case "reconnected":
-				if err := a.acknowledge(epoch, []string{"8.8.4.4/32"}); err != nil {
+				if err := testAcknowledge(a, epoch, []string{"8.8.4.4/32"}); err != nil {
 					t.Fatal(err)
 				}
 				a.peer(false)
 				a.peer(true)
-				if err := a.acknowledge(epoch, []string{"8.8.4.4/32"}); err == nil {
+				if err := testAcknowledge(a, epoch, []string{"8.8.4.4/32"}); err == nil {
 					t.Fatal("previous session acknowledgement survived reconnection")
 				}
 			}
@@ -179,10 +220,10 @@ func TestAcknowledgementSnapshotInvalidatesOmittedRoutes(t *testing.T) {
 	a.routes["8.8.8.8/32"] = &lease{Prefix: "8.8.8.8/32"}
 	a.routes["8.8.4.4/32"] = &lease{Prefix: "8.8.4.4/32"}
 	e := currentEpoch(a)
-	if err := a.acknowledge(e, []string{"8.8.8.8/32", "8.8.4.4/32"}); err != nil {
+	if err := testAcknowledge(a, e, []string{"8.8.8.8/32", "8.8.4.4/32"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.acknowledge(e, []string{"8.8.8.8/32"}); err != nil {
+	if err := testAcknowledge(a, e, []string{"8.8.8.8/32"}); err != nil {
 		t.Fatal(err)
 	}
 	if !a.routes["8.8.4.4/32"].AckAt.IsZero() || a.routes["8.8.8.8/32"].AckAt.IsZero() {
@@ -395,7 +436,11 @@ func TestAckHTTPRejectsOtherSourcesAndOldEpoch(t *testing.T) {
 		{"192.168.88.254:1234", "old-epoch", http.StatusConflict},
 		{"192.168.88.254:1234", currentEpoch(a), http.StatusNoContent},
 	} {
-		r := httptest.NewRequest("POST", "/ack", strings.NewReader(fmt.Sprintf(`{"epoch":%q,"prefixes":[]}`, tc.epoch)))
+		_, id, _, err := a.issueSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("POST", "/ack", strings.NewReader(fmt.Sprintf(`{"epoch":%q,"snapshot_id":%q,"prefixes":[]}`, tc.epoch, id)))
 		r.RemoteAddr = tc.remote
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -429,7 +474,7 @@ func TestConcurrentSameIPPublishesOnce(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("route never published")
 	}
-	if err := a.acknowledge(currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < n; i++ {
@@ -497,7 +542,7 @@ func TestWithdrawAndReaddRejectsPreviousRouteAcknowledgement(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("withdrawn prefix was not republished")
 	}
-	if err := a.acknowledge(oldEpoch, []string{"8.8.8.8/32"}); err == nil {
+	if err := testAcknowledge(a, oldEpoch, []string{"8.8.8.8/32"}); err == nil {
 		t.Fatal("pre-withdraw acknowledgement was accepted for a new path")
 	}
 	select {
@@ -505,7 +550,7 @@ func TestWithdrawAndReaddRejectsPreviousRouteAcknowledgement(t *testing.T) {
 		t.Fatalf("new path passed gate using old acknowledgement: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	if err := a.acknowledge(currentEpoch(a), []string{"8.8.8.8/32", "8.8.4.4/32"}); err != nil {
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32", "8.8.4.4/32"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -533,7 +578,7 @@ func TestShortTTLExpiringDuringRouteConfirmationIsNotReturned(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		m, err := a.resolve(ctx, q, false, true)
+		m, err := a.resolveOnce(ctx, q, false, true)
 		done <- result{m, err}
 	}()
 	select {
@@ -544,7 +589,7 @@ func TestShortTTLExpiringDuringRouteConfirmationIsNotReturned(t *testing.T) {
 	// The real DNS TTL is one second: do not make it last longer while waiting
 	// for the forwarding table. A late valid ACK must still reject that answer.
 	time.Sleep(1100 * time.Millisecond)
-	if err := a.acknowledge(currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
+	if err := testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -617,5 +662,294 @@ func TestConfirmationBudgetReachesBGPAddContext(t *testing.T) {
 	err = a.ensure(context.Background(), "github.com.", []netip.Addr{netip.MustParseAddr("8.8.8.8")}, 300, true)
 	if err == nil || time.Since(start) > 300*time.Millisecond || len(a.routes) != 0 {
 		t.Fatalf("BGP publication escaped budget or left usable state: elapsed=%s routes=%d err=%v", time.Since(start), len(a.routes), err)
+	}
+}
+
+func TestDNSResponseUDPTruncationAndTCPFallback(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(q)
+		for i := 0; i < 30; i++ {
+			m.Answer = append(m.Answer, &dns.TXT{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60}, Txt: []string{strings.Repeat("a", 80)}})
+		}
+		m.SetEdns0(4096, false) // an upstream OPT must not leak to a non-EDNS client
+		_ = writeDNSResponse(w, q, m)
+	})
+	startedUDP, startedTCP := make(chan struct{}), make(chan struct{})
+	u := &dns.Server{PacketConn: pc, Handler: handler, NotifyStartedFunc: func() { close(startedUDP) }}
+	s := &dns.Server{Listener: ln, Handler: handler, NotifyStartedFunc: func() { close(startedTCP) }}
+	go func() { _ = u.ActivateAndServe() }()
+	go func() { _ = s.ActivateAndServe() }()
+	<-startedUDP
+	<-startedTCP
+	t.Cleanup(func() { _ = u.Shutdown(); _ = s.Shutdown() })
+	for _, size := range []uint16{0, 512, 1232, 4096} {
+		q := new(dns.Msg)
+		q.SetQuestion("large.example.", dns.TypeTXT)
+		if size > 0 {
+			q.SetEdns0(size, false)
+		}
+		m, _, err := (&dns.Client{Timeout: time.Second}).Exchange(q, pc.LocalAddr().String())
+		if err != nil {
+			t.Fatalf("size %d UDP: %v", size, err)
+		}
+		limit := int(size)
+		if limit < 512 {
+			limit = 512
+		}
+		if limit > 1232 {
+			limit = 1232
+		}
+		m.Compress = true
+		wire, err := m.Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(wire) > limit || !m.Truncated {
+			t.Fatalf("size %d: UDP wire=%d TC=%v", size, len(wire), m.Truncated)
+		}
+		if size == 0 && m.IsEdns0() != nil {
+			t.Fatal("OPT leaked to non-EDNS client")
+		}
+		full, _, err := (&dns.Client{Net: "tcp", Timeout: time.Second}).Exchange(q, pc.LocalAddr().String())
+		if err != nil || full.Truncated || len(full.Answer) != 30 {
+			t.Fatalf("size %d TCP: answer=%v err=%v", size, full, err)
+		}
+		if size == 0 && full.IsEdns0() != nil {
+			t.Fatal("OPT leaked to non-EDNS TCP client")
+		}
+	}
+}
+
+func TestDNSCacheSeparatesEDNSOptions(t *testing.T) {
+	a, _ := testApp(t)
+	addr, count := testDNSUpstream(t, 60)
+	a.cfg.Upstreams = []string{addr}
+	plain := new(dns.Msg)
+	plain.SetQuestion("cache.example.", dns.TypeA)
+	edns := plain.Copy()
+	edns.SetEdns0(1232, false)
+	other := plain.Copy()
+	other.SetEdns0(4096, false)
+	for _, q := range []*dns.Msg{plain, edns, other, plain, edns, other} {
+		if _, err := a.lookup(context.Background(), q, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := count.Load(); got != 3 {
+		t.Fatalf("upstream requests = %d, want 3 distinct EDNS cache entries", got)
+	}
+}
+
+func TestEndToEndLargeAnswerFromUpstream(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(q)
+		for i := 0; i < 30; i++ {
+			m.Answer = append(m.Answer, &dns.TXT{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60}, Txt: []string{strings.Repeat("b", 80)}})
+		}
+		if _, udp := w.RemoteAddr().(*net.UDPAddr); udp {
+			m.Truncate(512)
+		}
+		_ = w.WriteMsg(m)
+	})
+	ready1, ready2 := make(chan struct{}), make(chan struct{})
+	u := &dns.Server{PacketConn: pc, Handler: upstream, NotifyStartedFunc: func() { close(ready1) }}
+	s := &dns.Server{Listener: ln, Handler: upstream, NotifyStartedFunc: func() { close(ready2) }}
+	go func() { _ = u.ActivateAndServe() }()
+	go func() { _ = s.ActivateAndServe() }()
+	<-ready1
+	<-ready2
+	t.Cleanup(func() { _ = u.Shutdown(); _ = s.Shutdown() })
+	a, _ := testApp(t)
+	a.cfg.Upstreams = []string{pc.LocalAddr().String()}
+	frontPC, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontLN, err := net.Listen("tcp", frontPC.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready3, ready4 := make(chan struct{}), make(chan struct{})
+	fudp := &dns.Server{PacketConn: frontPC, Handler: a, NotifyStartedFunc: func() { close(ready3) }}
+	ftcp := &dns.Server{Listener: frontLN, Handler: a, NotifyStartedFunc: func() { close(ready4) }}
+	go func() { _ = fudp.ActivateAndServe() }()
+	go func() { _ = ftcp.ActivateAndServe() }()
+	<-ready3
+	<-ready4
+	t.Cleanup(func() { _ = fudp.Shutdown(); _ = ftcp.Shutdown() })
+	q := new(dns.Msg)
+	q.SetQuestion("large.example.", dns.TypeTXT)
+	m, _, err := (&dns.Client{Timeout: time.Second}).Exchange(q, frontPC.LocalAddr().String())
+	if err != nil || !m.Truncated {
+		t.Fatalf("UDP result=%v err=%v", m, err)
+	}
+	full, _, err := (&dns.Client{Net: "tcp", Timeout: time.Second}).Exchange(q, frontPC.LocalAddr().String())
+	if err != nil || full.Truncated || len(full.Answer) != 30 {
+		t.Fatalf("TCP result=%v err=%v", full, err)
+	}
+}
+
+func TestSnapshotsBoundAgeReplayAndOrdering(t *testing.T) {
+	a, _ := testApp(t)
+	a.routes["8.8.8.8/32"] = &lease{Prefix: "8.8.8.8/32"}
+	a.routes["8.8.4.4/32"] = &lease{Prefix: "8.8.4.4/32"}
+	epoch, older, _, err := a.issueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, newer, _, err := a.issueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	issued := a.snapshots[newer].issued
+	a.mu.Unlock()
+	if err := a.acknowledge(epoch, newer, []string{"8.8.8.8/32"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.routes["8.8.8.8/32"].AckAt; got != issued {
+		t.Fatalf("ack freshness not based on issuance: %v != %v", got, issued)
+	}
+	for _, id := range []string{newer, older, "unknown", ""} {
+		if err := a.acknowledge(epoch, id, []string{"8.8.4.4/32"}); err == nil {
+			t.Fatalf("accepted replay or older id %q", id)
+		}
+		if a.routes["8.8.8.8/32"].AckAt != issued || !a.routes["8.8.4.4/32"].AckAt.IsZero() {
+			t.Fatal("rejected ACK modified existing snapshot")
+		}
+	}
+	_, expired, _, err := a.issueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	snap := a.snapshots[expired]
+	snap.issued = snap.issued.Add(-2 * time.Second)
+	a.snapshots[expired] = snap
+	a.mu.Unlock()
+	if err := a.acknowledge(epoch, expired, []string{"8.8.4.4/32"}); err == nil {
+		t.Fatal("accepted expired snapshot")
+	}
+	if a.routes["8.8.8.8/32"].AckAt != issued {
+		t.Fatal("expired ACK modified existing snapshot")
+	}
+	_, restricted, _, err := a.issueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.acknowledge(epoch, restricted, []string{"1.1.1.1/32"}); err == nil {
+		t.Fatal("accepted prefix not in issued snapshot")
+	}
+	if a.routes["8.8.8.8/32"].AckAt != issued {
+		t.Fatal("invalid ACK modified existing snapshot")
+	}
+}
+
+func TestPendingSnapshotBoundAndExpiryCleanup(t *testing.T) {
+	a, _ := testApp(t)
+	for i := 0; i < maxPendingSnapshots; i++ {
+		if _, _, _, err := a.issueSnapshot(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := a.issueSnapshot(); err == nil {
+		t.Fatal("snapshot capacity was not enforced")
+	}
+	a.mu.Lock()
+	for id, snap := range a.snapshots {
+		snap.issued = snap.issued.Add(-2 * time.Second)
+		a.snapshots[id] = snap
+	}
+	a.mu.Unlock()
+	if _, _, _, err := a.issueSnapshot(); err != nil {
+		t.Fatalf("expired snapshot cleanup failed: %v", err)
+	}
+	a.mu.Lock()
+	count := len(a.snapshots)
+	a.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("pending snapshots %d, want 1", count)
+	}
+}
+
+func TestDesiredRestrictsSnapshotIssuance(t *testing.T) {
+	a, _ := testApp(t)
+	h := a.httpHandler()
+	for _, tc := range []struct {
+		remote string
+		want   int
+	}{
+		{"192.168.88.65:1234", http.StatusForbidden},
+		{"192.168.88.254:1234", http.StatusOK},
+		{"127.0.0.1:1234", http.StatusOK},
+		{"malformed", http.StatusForbidden},
+	} {
+		r := httptest.NewRequest("GET", "/desired", nil)
+		r.RemoteAddr = tc.remote
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("remote=%s got=%d want=%d", tc.remote, w.Code, tc.want)
+		}
+	}
+	a.mu.Lock()
+	pending := len(a.snapshots)
+	a.mu.Unlock()
+	if pending != 2 {
+		t.Fatalf("unauthorized requests issued snapshot: pending=%d", pending)
+	}
+}
+
+func TestResolveRefreshesOnceWhenAnswerExpiresWaitingForAck(t *testing.T) {
+	a, pub := testApp(t)
+	a.cfg.ConfirmMS = 2000
+	a.cfg.AckMaxAgeMS = 3000
+	addr, count := testDNSUpstream(t, 1)
+	a.cfg.Upstreams = []string{addr}
+	ackDone := make(chan error, 1)
+	go func() {
+		select {
+		case <-pub.notify:
+		case <-time.After(time.Second):
+			ackDone <- errors.New("publication not observed")
+			return
+		}
+		time.Sleep(1100 * time.Millisecond)
+		ackDone <- testAcknowledge(a, currentEpoch(a), []string{"8.8.8.8/32"})
+	}()
+	q := new(dns.Msg)
+	q.SetQuestion("short.example.", dns.TypeA)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	m, err := a.resolve(ctx, q, false, true)
+	if ackErr := <-ackDone; ackErr != nil {
+		t.Fatal(ackErr)
+	}
+	if err != nil {
+		t.Fatalf("expired answer was not refreshed: %v", err)
+	}
+	if count.Load() != 2 {
+		t.Fatalf("upstream queries=%d want first+one refresh", count.Load())
+	}
+	if len(m.Answer) != 1 || m.Answer[0].Header().Ttl > 1 {
+		t.Fatalf("unexpected answer or raised TTL: %v", m.Answer)
 	}
 }

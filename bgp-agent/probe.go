@@ -24,11 +24,16 @@ func probe(args []string) {
 	q.SetQuestion(dns.Fqdn(*name), dns.TypeA)
 	start := time.Now()
 	r, _, e := (&dns.Client{Timeout: 8 * time.Second}).Exchange(q, *server)
+	transport := "udp"
+	if e == nil && r.Truncated {
+		transport = "tcp"
+		r, _, e = (&dns.Client{Net: "tcp", Timeout: 8 * time.Second}).Exchange(q, *server)
+	}
 	if e != nil {
 		fmt.Println(e)
 		os.Exit(1)
 	}
-	fmt.Printf("DNS elapsed=%s %s\n", time.Since(start), r)
+	fmt.Printf("DNS transport=%s elapsed=%s %s\n", transport, time.Since(start), r)
 	if r.Rcode != dns.RcodeSuccess {
 		os.Exit(1)
 	}
@@ -52,7 +57,7 @@ func probe(args []string) {
 		return
 	}
 	resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "udp", *server)
+		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, network, *server)
 	}}
 	d := &net.Dialer{Timeout: 5 * time.Second, Resolver: resolver}
 	c := &http.Client{Timeout: 12 * time.Second, Transport: &http.Transport{DialContext: d.DialContext}}

@@ -20,7 +20,7 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=build --chmod=755 /out/bgp-agent /usr/bin/bgp-agent
 RUN mkdir -p /etc/bgp-agent /data
 LABEL org.opencontainers.image.title="mosdns BGP validation agent" \
-      org.opencontainers.image.version="bgp-validation-20261114.1" \
+      org.opencontainers.image.version="bgp-validation-20261114.5" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/jeffok/mosdns"
 ENV TZ=UTC

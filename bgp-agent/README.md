@@ -26,8 +26,8 @@ Dockerfile 锁定 Go 1.26.3 和 Alpine 基础镜像的多架构索引摘要，�
 | --- | --- | --- |
 | `ttl_max` | 300 秒 | 保留上游较短 TTL，缓存命中递减，不提供过期缓存 |
 | `retain_seconds` | 86400 秒 | 业务路由保留时间，不是 BGP Hold Time |
-| `confirm_ms` | 2500 毫秒 | 等待 ROS active-route 回报的上限，不是固定睡眠 |
-| `ack_max_age_ms` | 3000 毫秒 | 超时回报不再视为可用；异常时新查询返回 SERVFAIL |
+| `confirm_ms` | 4500 毫秒 | 等待 ROS active-route 回报的上限，不是固定睡眠 |
+| `ack_max_age_ms` | 6000 毫秒 | 超时回报不再视为可用；异常时新查询返回 SERVFAIL |
 | `max_routes` | 512 | 容量满时拒绝继续发布，不能驱逐有效路由凑空间 |
 | `gc_dry_run` | true | 记录回收候选，不自动撤掉正常站点路由 |
 

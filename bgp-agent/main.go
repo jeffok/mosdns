@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,12 @@ type cached struct {
 	msg             *dns.Msg
 	stored, expires time.Time
 }
+type routeSnapshot struct {
+	epoch    string
+	issued   time.Time // retains Go's monotonic clock reading
+	sequence uint64
+	prefixes map[string]struct{}
+}
 type publication interface {
 	Add(string) ([]byte, error)
 	Delete([]byte) error
@@ -109,6 +116,8 @@ type app struct {
 	routes                                     map[string]*lease
 	cache                                      map[string]cached
 	epoch                                      string
+	snapshots                                  map[string]routeSnapshot
+	snapshotSequence, lastAppliedSnapshot      uint64
 	up                                         bool
 	pub                                        publication
 	cn                                         []netip.Prefix
@@ -140,7 +149,7 @@ func newApp(c config, p publication) (*app, error) {
 			return nil, e
 		}
 	}
-	a := &app{cfg: c, routes: map[string]*lease{}, cache: map[string]cached{}, epoch: token(), pub: p, stop: make(chan struct{})}
+	a := &app{cfg: c, routes: map[string]*lease{}, cache: map[string]cached{}, snapshots: map[string]routeSnapshot{}, epoch: token(), pub: p, stop: make(chan struct{})}
 	b, e := os.ReadFile(c.CNFile)
 	if e != nil {
 		return nil, e
@@ -222,6 +231,7 @@ func (a *app) peer(up bool) {
 	if up != a.up {
 		a.up = up
 		a.epoch = token()
+		clear(a.snapshots)
 		for _, r := range a.routes {
 			r.AckAt = time.Time{}
 		}
@@ -336,19 +346,66 @@ func (a *app) ensure(ctx context.Context, name string, ips []netip.Addr, ttl uin
 		}
 	}
 }
-func (a *app) acknowledge(epoch string, prefixes []string) error {
+
+const maxPendingSnapshots = 32
+
+// issueSnapshot records issuance before handing the route list to RouterOS.
+// Its monotonic timestamp bounds the age of the resulting confirmation.
+func (a *app) issueSnapshot() (string, string, []string, error) {
+	id := token()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	maxAge := time.Duration(a.cfg.AckMaxAgeMS) * time.Millisecond
+	for key, snap := range a.snapshots {
+		if now.Sub(snap.issued) >= maxAge {
+			delete(a.snapshots, key)
+		}
+	}
+	if len(a.snapshots) >= maxPendingSnapshots {
+		return "", "", nil, errors.New("too many pending route snapshots")
+	}
+	prefixes := make([]string, 0, len(a.routes))
+	wanted := make(map[string]struct{}, len(a.routes))
+	for prefix := range a.routes {
+		prefixes = append(prefixes, prefix)
+		wanted[prefix] = struct{}{}
+	}
+	a.snapshotSequence++
+	a.snapshots[id] = routeSnapshot{epoch: a.epoch, issued: now, sequence: a.snapshotSequence, prefixes: wanted}
+	return a.epoch, id, prefixes, nil
+}
+
+func (a *app) acknowledge(epoch, snapshotID string, prefixes []string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.up || epoch != a.epoch {
 		return errors.New("stale BGP epoch")
 	}
+	snap, ok := a.snapshots[snapshotID]
+	if !ok || snap.epoch != epoch || snap.sequence <= a.lastAppliedSnapshot {
+		return errors.New("unknown, replayed or superseded snapshot")
+	}
+	if time.Since(snap.issued) >= time.Duration(a.cfg.AckMaxAgeMS)*time.Millisecond {
+		delete(a.snapshots, snapshotID)
+		return errors.New("expired snapshot")
+	}
+	if len(prefixes) > len(snap.prefixes) {
+		return errors.New("invalid snapshot prefix count")
+	}
+	for _, p := range prefixes {
+		if _, ok := snap.prefixes[p]; !ok {
+			return errors.New("prefix absent from snapshot")
+		}
+	}
+	delete(a.snapshots, snapshotID)
+	a.lastAppliedSnapshot = snap.sequence
 	for _, r := range a.routes {
 		r.AckAt = time.Time{}
 	}
-	now := time.Now()
 	for _, p := range prefixes {
 		if r := a.routes[p]; r != nil {
-			r.AckAt = now
+			r.AckAt = snap.issued
 		}
 	}
 	return nil
@@ -438,6 +495,7 @@ func (a *app) gc(now time.Time) {
 		delete(a.routes, k)
 		a.dirty = true
 		a.epoch = token()
+		clear(a.snapshots)
 		for _, remaining := range a.routes {
 			remaining.AckAt = time.Time{}
 		}
@@ -471,6 +529,11 @@ func clamp(m *dns.Msg, max uint32) uint32 {
 func (a *app) lookup(ctx context.Context, q *dns.Msg, refresh bool) (*dns.Msg, error) {
 	do := q.IsEdns0() != nil && q.IsEdns0().Do()
 	key := fmt.Sprintf("%s/%d/%d/%v/%v", strings.ToLower(q.Question[0].Name), q.Question[0].Qtype, q.Question[0].Qclass, do, q.CheckingDisabled)
+	// EDNS options (for example ECS and cookies) can change the upstream
+	// response. Never share a cached response between different OPT records.
+	if opt := q.IsEdns0(); opt != nil {
+		key += "/" + opt.String()
+	}
 	now := time.Now()
 	if !refresh {
 		a.mu.Lock()
@@ -556,7 +619,20 @@ func (a *app) lookup(ctx context.Context, q *dns.Msg, refresh bool) (*dns.Msg, e
 	m.Id = q.Id
 	return m, nil
 }
+
+var errAnswerExpired = errors.New("DNS answer expired while waiting for route")
+
 func (a *app) resolve(ctx context.Context, q *dns.Msg, refresh, advertised bool) (*dns.Msg, error) {
+	m, err := a.resolveOnce(ctx, q, refresh, advertised)
+	if errors.Is(err, errAnswerExpired) && ctx.Err() == nil {
+		// The first answer aged out while waiting for its route. Refresh once,
+		// within the original request deadline, without increasing its TTL.
+		return a.resolveOnce(ctx, q, true, advertised)
+	}
+	return m, err
+}
+
+func (a *app) resolveOnce(ctx context.Context, q *dns.Msg, refresh, advertised bool) (*dns.Msg, error) {
 	m, e := a.lookup(ctx, q, refresh)
 	if e != nil {
 		return nil, e
@@ -581,7 +657,7 @@ func (a *app) resolve(ctx context.Context, q *dns.Msg, refresh, advertised bool)
 
 	age := uint32(time.Since(confirmedSince) / time.Second)
 	if ttl > 0 && age >= ttl {
-		return nil, errors.New("DNS answer expired while waiting for route")
+		return nil, errAnswerExpired
 	}
 	if age > 0 {
 		for _, rrs := range [][]dns.RR{m.Answer, m.Ns, m.Extra} {
@@ -598,6 +674,44 @@ func (a *app) resolve(ctx context.Context, q *dns.Msg, refresh, advertised bool)
 	}
 	return m, nil
 }
+
+// writeDNSResponse prepares an independent response for the current client;
+// the cached full message is never truncated or otherwise modified in place.
+func writeDNSResponse(w dns.ResponseWriter, q, response *dns.Msg) error {
+	m := response.Copy()
+	if q.IsEdns0() == nil {
+		extra := m.Extra[:0]
+		for _, rr := range m.Extra {
+			if rr.Header().Rrtype != dns.TypeOPT {
+				extra = append(extra, rr)
+			}
+		}
+		m.Extra = extra
+	}
+	if _, udp := w.RemoteAddr().(*net.UDPAddr); udp {
+		size := dns.MinMsgSize
+		if opt := q.IsEdns0(); opt != nil && int(opt.UDPSize()) > size {
+			size = int(opt.UDPSize())
+		}
+		// Cap the UDP payload to avoid routine IP fragmentation. Clients can
+		// obtain the full message over TCP when the TC bit is set.
+		if size > 1232 {
+			size = 1232
+		}
+		m.Truncate(size)
+		// An unusually large upstream OPT may itself exceed the budget. Keep
+		// the EDNS header but remove optional data before retrying truncation.
+		if m.Len() > size {
+			if opt := m.IsEdns0(); opt != nil {
+				opt.Option = nil
+			}
+			m.Truncated = true
+			m.Truncate(size)
+		}
+	}
+	return w.WriteMsg(m)
+}
+
 func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 	a.requests.Add(1)
 	a.dnsOnce.Do(func() { a.slots = make(chan struct{}, 32) })
@@ -607,19 +721,19 @@ func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 	default:
 		m := new(dns.Msg)
 		m.SetRcode(q, dns.RcodeServerFailure)
-		w.WriteMsg(m)
+		_ = writeDNSResponse(w, q, m)
 		return
 	}
 	if len(q.Question) != 1 || q.Opcode != dns.OpcodeQuery || q.Question[0].Qclass != dns.ClassINET {
 		m := new(dns.Msg)
 		m.SetRcode(q, dns.RcodeRefused)
-		w.WriteMsg(m)
+		_ = writeDNSResponse(w, q, m)
 		return
 	}
 	if q.Question[0].Qtype == dns.TypeAAAA {
 		m := new(dns.Msg)
 		m.SetReply(q)
-		w.WriteMsg(m)
+		_ = writeDNSResponse(w, q, m)
 		return
 	}
 	ctx, c := context.WithTimeout(context.Background(), 6*time.Second)
@@ -631,7 +745,7 @@ func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 		m = new(dns.Msg)
 		m.SetRcode(q, dns.RcodeServerFailure)
 	}
-	w.WriteMsg(m)
+	_ = writeDNSResponse(w, q, m)
 }
 func (a *app) httpHandler() http.Handler {
 	mux := http.NewServeMux()
@@ -650,14 +764,24 @@ func (a *app) httpHandler() http.Handler {
 			http.Error(w, "method", 405)
 			return
 		}
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		p := make([]string, 0, len(a.routes))
-		for k := range a.routes {
-			p = append(p, k)
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil || (host != a.cfg.PeerIP && host != "127.0.0.1") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		epoch, snapshotID, p, err := a.issueSnapshot()
+		if err != nil {
+			http.Error(w, "snapshot capacity exceeded", http.StatusServiceUnavailable)
+			return
+		}
+		body, err := json.Marshal(map[string]any{"epoch": epoch, "snapshot_id": snapshotID, "prefixes": p})
+		if err != nil {
+			http.Error(w, "snapshot encoding failed", http.StatusInternalServerError)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"epoch": a.epoch, "prefixes": p})
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("/ack", func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -666,14 +790,15 @@ func (a *app) httpHandler() http.Handler {
 			return
 		}
 		var b struct {
-			Epoch    string   `json:"epoch"`
-			Prefixes []string `json:"prefixes"`
+			Epoch      string   `json:"epoch"`
+			SnapshotID string   `json:"snapshot_id"`
+			Prefixes   []string `json:"prefixes"`
 		}
 		if e := json.NewDecoder(io.LimitReader(r.Body, 1024*1024)).Decode(&b); e != nil {
 			http.Error(w, "bad JSON", 400)
 			return
 		}
-		if e := a.acknowledge(b.Epoch, b.Prefixes); e != nil {
+		if e := a.acknowledge(b.Epoch, b.SnapshotID, b.Prefixes); e != nil {
 			http.Error(w, e.Error(), 409)
 			return
 		}
