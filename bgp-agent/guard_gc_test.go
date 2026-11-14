@@ -3,6 +3,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -400,5 +402,45 @@ func TestGuardRecoveryAuditPhaseCrashWindows(t *testing.T) {
 				t.Fatal("claim check unlocked recovery")
 			}
 		})
+	}
+}
+
+func TestGuardGCUnavailableDefaultAndMistakenEnable(t *testing.T) {
+	a, pub := testApp(t)
+	before := len(a.routes)
+	cases := []struct{ path, method string }{{"/guardgc/next", "GET"}, {"/guardgc/ack", "POST"}, {"/guardwriter/next", "GET"}, {"/guardwriter/ack", "POST"}}
+	for _, tc := range cases {
+		h := a.httpHandler()
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		r.RemoteAddr = "192.168.88.254:1234"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("disabled %s: %d", tc.path, w.Code)
+		}
+		a.cfg.GuardGCEnabled = true
+		r = httptest.NewRequest(tc.method, tc.path, nil)
+		r.RemoteAddr = "192.168.88.65:1234"
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("untrusted %s: %d", tc.path, w.Code)
+		}
+		r = httptest.NewRequest(tc.method, tc.path, nil)
+		r.RemoteAddr = "192.168.88.254:1234"
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("unsupported %s: %d", tc.path, w.Code)
+		}
+		a.cfg.GuardGCEnabled = false
+	}
+	if adds, deletes := pub.counts(); adds != 0 || deletes != 0 || len(a.routes) != before {
+		t.Fatal("unavailable endpoint changed routes")
+	}
+	cfg := testConfig(t)
+	cfg.GuardGCEnabled = true
+	if _, err := newApp(cfg, pub); err == nil {
+		t.Fatal("guard GC started before integration")
 	}
 }

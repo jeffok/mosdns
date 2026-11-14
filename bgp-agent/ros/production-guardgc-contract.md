@@ -1,6 +1,10 @@
 # Disabled production guard-GC wire draft
 
-Status: **design draft; not integrated or verified**. `production-guardgc-draft.rsc` creates no scheduler and has both `enabled=false` and `mutationEnabled=false`. The actual agent in this repository does not expose `/guardgc/next` or `/guardgc/ack`; its existing `/desired` and `/ack` endpoints must not be repurposed for destructive GC. Do not enable the script on production or claim working automatic GC. The existing durability coordinator is not a RouterOS integration.
+Status: **design draft; not integrated or verified**.
+
+**Blocking mismatch:** The normal agent `/desired` endpoint currently exposes only prefix strings, while this GC draft requires the guard coordinator's distinct 24-hex per-prefix generation in every guard owner and operation. No production endpoint binds normal BGP route generation, guard generation, epoch and snapshot atomically. A separate normal ACK scheduler and this GC scheduler cannot satisfy the required single-writer invariant. The proposed `/guardwriter/next` and `/guardwriter/ack` common queue, including authenticated identity, response pins, startup reconciliation, create-guard, refresh-ACK, and the `observe_withdrawn` child probe, has not been implemented. Enabling either draft or wiring the old normal ACK around it can acknowledge an unprotected or wrong-generation route. Both script switches must remain `false`; do not create a scheduler or deploy this draft.
+
+This document and its JSON examples are a review contract, not an implemented API. `production-guardgc-draft.rsc` creates no scheduler and has both `enabled=false` and `mutationEnabled=false`. The actual agent in this repository does not expose `/guardgc/next` or `/guardgc/ack`; its existing `/desired` and `/ack` endpoints must not be repurposed for destructive GC. Do not enable the script on production or claim working automatic GC. The existing durability coordinator is not a RouterOS integration.
 
 ## Scope and prerequisites
 

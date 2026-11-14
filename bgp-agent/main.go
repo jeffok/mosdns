@@ -44,6 +44,7 @@ type config struct {
 	DNSListen       string   `json:"dns_listen"`
 	HTTPListen      string   `json:"http_listen"`
 	ConfirmClientIP string   `json:"confirm_client_ip"` // empty disables /confirm
+	GuardGCEnabled  bool     `json:"guard_gc_enabled"`  // currently unavailable; startup rejects true
 	Upstreams       []string `json:"upstreams"`
 	Warm            []string `json:"warm_domains"`
 	CNFile          string   `json:"cn_file"`
@@ -140,6 +141,11 @@ func token() string {
 	return hex.EncodeToString(b)
 }
 func newApp(c config, p publication) (*app, error) {
+	// Never run the legacy answer path with experimental cleanup requested: the
+	// coordinator is not yet connected to the DNS send pin or trusted ROS writer.
+	if c.GuardGCEnabled {
+		return nil, errors.New("guard_gc_enabled is unavailable: protected writer and recovery are not integrated")
+	}
 	if c.TTLMax == 0 || c.TTLMax > 300 || c.RetainSeconds < 300 || c.ConfirmMS < 1 || c.ConfirmMS > 30000 || c.AckMaxAgeMS < 1 || c.MaxRoutes < 1 {
 		return nil, errors.New("invalid TTL/retention/confirmation/capacity configuration")
 	}
@@ -885,6 +891,30 @@ func (a *app) ServeDNS(w dns.ResponseWriter, q *dns.Msg) {
 }
 func (a *app) httpHandler() http.Handler {
 	mux := http.NewServeMux()
+	// Reserved fail-closed interfaces only; no state machine operation is
+	// exposed before writer authentication, DNS pinning and recovery exist.
+	guardUnavailable := func(method string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !a.cfg.GuardGCEnabled {
+				http.NotFound(w, r)
+				return
+			}
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil || host != a.cfg.PeerIP {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if r.Method != method {
+				http.Error(w, "method", http.StatusMethodNotAllowed)
+				return
+			}
+			http.Error(w, "protected guard writer is unavailable", http.StatusServiceUnavailable)
+		}
+	}
+	mux.HandleFunc("/guardgc/next", guardUnavailable(http.MethodGet))
+	mux.HandleFunc("/guardgc/ack", guardUnavailable(http.MethodPost))
+	mux.HandleFunc("/guardwriter/next", guardUnavailable(http.MethodGet))
+	mux.HandleFunc("/guardwriter/ack", guardUnavailable(http.MethodPost))
 	mux.HandleFunc("/confirm", func(w http.ResponseWriter, r *http.Request) {
 		if a.cfg.ConfirmClientIP == "" {
 			http.NotFound(w, r)
@@ -1105,6 +1135,9 @@ func run(path string) error {
 	var c config
 	if e = json.Unmarshal(b, &c); e != nil {
 		return e
+	}
+	if c.GuardGCEnabled {
+		return errors.New("guard_gc_enabled is unavailable: protected writer and recovery are not integrated")
 	}
 	for _, ip := range []string{c.LocalIP, c.PeerIP, c.NextHop} {
 		if _, e := netip.ParseAddr(ip); e != nil {
