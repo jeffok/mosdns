@@ -710,6 +710,10 @@ func TestFailedPublicationNeverBecomesUsableLease(t *testing.T) {
 
 func TestConcurrentSameIPPublishesOnce(t *testing.T) {
 	a, pub := testApp(t)
+	// Durable state writes contend under the race detector; this test asserts
+	// deduplication, not a 120 ms filesystem latency bound.
+	a.cfg.ConfirmMS = 2000
+	a.cfg.AckMaxAgeMS = 5000
 	ip := netip.MustParseAddr("8.8.8.8")
 	const n = 12
 	done := make(chan error, n)
